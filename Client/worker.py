@@ -64,8 +64,8 @@ from client import try_forever
 # 54: fork adds NNUEFile injection for runtime-loading engines (Luminex).
 # Bumped deliberately so a worker still running upstream's v53 client is
 # rejected by the server instead of silently producing net-less tests.
-# 56: idle benchmark keeps machine NPS alive without running tests.
-CLIENT_VERSION   = 56 # Client version to send to the Server
+# 57: idle benchmark builds the engine if none cached yet.
+CLIENT_VERSION   = 57 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1304,6 +1304,36 @@ def safe_run_benchmarks(config, branch, engine):
 IDLE_BENCH_INTERVAL = 30 * 60
 _next_idle_bench = [0.0]
 
+def idle_build_engine(config):
+    """(Luminex fork) Build the newest registered engine this machine supports,
+    without a workload. Uses the same build path as real workloads (source
+    archive via the proxy-aware fetch, Makefile shim, configured compiler)."""
+    target = utils.url_join(config.server, 'clientGetBuildInfo')
+    builds = requests.get(target, timeout=TIMEOUT_HTTP).json()
+    for engine, build in builds.items():
+        if engine not in config.compilers:
+            continue
+        if build.get('cpuflags') and any(f not in config.cpu_flags for f in build['cpuflags']):
+            continue
+        if config.os_name not in build.get('systems', []):
+            continue
+        source = build['source']
+        sha    = source.rstrip('.zip').rsplit('/', 1)[-1]
+        # default network for this engine, for the binary name + later runs
+        nets = requests.get(utils.url_join(config.server, 'api/networks/%s' % (engine)),
+                            auth=(config.username, config.password), timeout=TIMEOUT_HTTP).json()
+        net = nets.get('default') or (nets.get('networks') or [None])[0]
+        net_sha  = net['sha256'] if net else 'NONET00'
+        net_name = net['name'] if net else 'none.nnue'
+        net_path = utils.download_network(config.server, config.username, config.password,
+                                          engine, net_name, net_sha, os.path.join('Networks', net_sha))
+        bin_name = utils.engine_binary_name(engine, sha, net_path)
+        out_path = os.path.join('Engines', bin_name)
+        return utils.prepare_engine(engine, net_path, sha, source, build['path'],
+                                    out_path, build.get('private', False),
+                                    config.compilers[engine][0])
+    raise Exception('no buildable engine for this machine')
+
 def idle_bench_report(config, force=False):
     """(Luminex fork) Keep the machines page NPS column alive even while no
     tests are running: bench the newest CACHED engine at the worker's full
@@ -1318,9 +1348,10 @@ def idle_bench_report(config, force=False):
     try:
         binaries = [b for b in _glob.glob('Engines/*') if os.path.isfile(b)]
         if not binaries:
-            print ('[NOTE] Idle benchmark skipped: no cached engine yet '
-                   '(the first claimed workload builds one)')
-            return
+            # No cached engine yet: BUILD the newest registered engine once so
+            # every machine reports real NPS even before its first workload.
+            print ('[NOTE] No cached engine; building one for the idle benchmark')
+            binaries = [os.path.join('Engines', idle_build_engine(config))]
         binary = max(binaries, key=os.path.getmtime)
         threads = max(1, int(config.threads))
         print ('\nIdle benchmark of %s x%d (machine NPS refresh)' % (os.path.basename(binary), threads))
