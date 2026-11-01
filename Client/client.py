@@ -23,6 +23,7 @@ import importlib
 import os
 import requests
 import shutil
+import sys
 import tempfile
 import time
 import traceback
@@ -164,8 +165,10 @@ def download_client_files(args):
 
 if __name__ == '__main__':
 
-    # Use client.py's path as the base pathway
+    # Use client.py's path as the base pathway; also force it onto sys.path,
+    # since safe-path-mode Pythons do not add the script dir automatically
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
     args = parse_arguments()
 

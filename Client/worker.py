@@ -64,8 +64,8 @@ from client import try_forever
 # 54: fork adds NNUEFile injection for runtime-loading engines (Luminex).
 # Bumped deliberately so a worker still running upstream's v53 client is
 # rejected by the server instead of silently producing net-less tests.
-# 59: fix client self-download import failure on fresh checkouts.
-CLIENT_VERSION   = 59 # Client version to send to the Server
+# 60: force script dir onto sys.path for safe-path Pythons.
+CLIENT_VERSION   = 60 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
