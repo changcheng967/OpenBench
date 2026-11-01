@@ -1,0 +1,10 @@
+# Production-only dependencies (the server side).
+# Upstream's requirements.txt targets `manage.py runserver`; this adds a real
+# WSGI server and static-file handling so DEBUG can be turned off.
+#
+# Install both:
+#   pip install -r requirements.txt -r requirements-prod.txt
+-r requirements.txt
+
+gunicorn==23.0.0
+whitenoise==6.7.0

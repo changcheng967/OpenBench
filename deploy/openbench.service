@@ -1,0 +1,37 @@
+[Unit]
+Description=OpenBench (Luminex testing server)
+Documentation=https://github.com/AndyGrant/OpenBench/wiki
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openbench
+Group=openbench
+WorkingDirectory=/opt/openbench
+EnvironmentFile=/opt/openbench/.env
+
+# 3 workers is plenty: this process only serves a job queue and small API calls.
+# It does NO chess computation — all searching happens on the worker clients.
+# --timeout 120 covers PGN uploads and zstd compression of large networks.
+ExecStart=/opt/openbench/.venv/bin/gunicorn OpenSite.wsgi:application \
+    --bind 127.0.0.1:8000 \
+    --workers 3 \
+    --threads 2 \
+    --timeout 120 \
+    --access-logfile - \
+    --error-logfile -
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+
+# Modest hardening; none of this interferes with Django.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/openbench
+
+[Install]
+WantedBy=multi-user.target

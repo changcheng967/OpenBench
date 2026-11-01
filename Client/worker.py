@@ -61,7 +61,10 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 53 # Client version to send to the Server
+# 54: fork adds NNUEFile injection for runtime-loading engines (Luminex).
+# Bumped deliberately so a worker still running upstream's v53 client is
+# rejected by the server instead of silently producing net-less tests.
+CLIENT_VERSION   = 54 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -515,6 +518,27 @@ class MatchRunner:
         # Set a SyzygyProbeLimit if we may only use up-to N-Man
         if syzygy != 'DISABLED' and syzygy != 'OPTIONAL':
             options += ' SyzygyProbeLimit=%s' % (syzygy.split('-')[0])
+
+        # (Luminex fork) Inject the network path for engines that load their net
+        # at runtime via a UCI option instead of embedding it at build time.
+        #
+        # Upstream assumes every engine bakes its net in through EVALFILE=, so
+        # the net never appears in the UCI option string. Luminex loads .nnue
+        # files at runtime, so without this the engine has no net and evaluates
+        # with a garbage/empty accumulator.
+        #
+        # The engine process runs with cwd=Engines/ (see dir= below), so the path
+        # must be absolute. Skip if the test author already set NNUEFile by hand.
+        #
+        # The option name is NNUEFile, NOT EvalFile. src/uci.cpp:218 declares
+        # `option name NNUEFile type string`; a setoption for any other name hits
+        # the catch-all branch at src/uci.cpp:435 and is silently ignored, so an
+        # EvalFile= here produces tests where no net is ever loaded and every
+        # evaluation is the HCE fallback — wrong results, no error anywhere.
+        net_sha = config.workload['test'][branch].get('network') or ''
+        if net_sha and 'NNUEFile=' not in options:
+            net_abs = os.path.abspath(os.path.join('Networks', net_sha)).replace('\\', '/')
+            options += ' NNUEFile=%s' % (net_abs)
 
         # Add any of the custom SPSA settings
         if config.workload['test']['type'] == 'SPSA':

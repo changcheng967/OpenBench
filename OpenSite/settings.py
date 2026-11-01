@@ -19,10 +19,32 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
 # SECURITY WARNING: keep the secret key used in production secret!
 # SECURITY WARNING: don't run with debug turned on in production!
-SECRET_KEY = '@!zw2l8til1(0eb_nk+1w!(n78gqm&u)s)_v7#k6iseia@g9q0'
-DEBUG = True
+#
+# NOTE (Luminex fork): the key committed upstream is PUBLIC — it is in every
+# clone of AndyGrant/OpenBench. Deploying with it means anyone can forge signed
+# session cookies and log in as any user. Always set OPENBENCH_SECRET_KEY.
+# deploy/bootstrap.sh generates one and writes it to /opt/openbench/.env
+SECRET_KEY = os.environ.get('OPENBENCH_SECRET_KEY')
+if not SECRET_KEY:
+    import warnings
+    SECRET_KEY = '@!zw2l8til1(0eb_nk+1w!(n78gqm&u)s)_v7#k6iseia@g9q0'
+    warnings.warn(
+        'OPENBENCH_SECRET_KEY is not set; falling back to the PUBLIC upstream key. '
+        'Safe for local development only. Set it before exposing this server.'
+    )
 
-ALLOWED_HOSTS = ['*']
+# Defaults to True so a fresh clone still works with `manage.py runserver`.
+# deploy/bootstrap.sh sets OPENBENCH_DEBUG=0 in the systemd environment.
+DEBUG = os.environ.get('OPENBENCH_DEBUG', 'True').strip().lower() in ('1', 'true', 'yes', 'on')
+
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get('OPENBENCH_ALLOWED_HOSTS', '*').split(',') if h.strip()
+]
+# Django 4+ rejects requests whose Host header is not in ALLOWED_HOSTS; behind a
+# Cloudflare Tunnel or a reverse proxy, also trust the forwarded scheme.
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get('OPENBENCH_CSRF_ORIGINS', '').split(',') if o.strip()
+]
 
 HTML_MINIFY   = True
 APPEND_SLASH  = True
@@ -37,7 +59,22 @@ PROJECT_PATH  = os.path.abspath(PROJECT_PATH)
 TEMPLATE_PATH = os.path.join(PROJECT_PATH, 'Templates')
 
 MEDIA_URL  = '/Media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'Media')
+# (Luminex fork) Allow Media to live on a different disk/volume from the code.
+MEDIA_ROOT = os.environ.get('OPENBENCH_MEDIA_ROOT') or os.path.join(BASE_DIR, 'Media')
+
+# (Luminex fork) Needed for `collectstatic` when DEBUG=False. Upstream never
+# defined these because it always ran with DEBUG=True and let Django serve
+# static files itself; that stops working the moment DEBUG is off.
+STATIC_URL  = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'Static')
+
+# (Luminex fork) Whitenoise lets gunicorn serve static assets directly, so a
+# free single-VM deployment needs no nginx. Optional: absent in a bare clone.
+try:
+    import whitenoise  # noqa: F401
+    HAS_WHITENOISE = True
+except ImportError:
+    HAS_WHITENOISE = False
 
 INSTALLED_APPS = [
     'OpenBench',
@@ -61,6 +98,15 @@ MIDDLEWARE = [
     'htmlmin.middleware.HtmlMinifyMiddleware',
     'htmlmin.middleware.MarkRequestMiddleware',
 ]
+
+# (Luminex fork) Whitenoise must sit directly after SecurityMiddleware to
+# intercept static requests before they reach Django's URL resolution.
+if HAS_WHITENOISE:
+    MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
+    STORAGES = {
+        'default':      {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles':  {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+    }
 
 ROOT_URLCONF = 'OpenSite.urls'
 
