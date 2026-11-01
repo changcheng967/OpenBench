@@ -95,6 +95,26 @@ class Configuration:
         self.mac_address    = hex(uuid.getnode()).upper()[2:]
         self.logical_cores  = psutil.cpu_count(logical=True)
         self.physical_cores = psutil.cpu_count(logical=False)
+        # Cgroup-quota-aware count: os/psutil report the HOST inside
+        # containers (e.g. 112) while the quota may allow far fewer. Reported
+        # to the server so the machine page shows usable cores.
+        self.effective_cores = None
+        try:
+            counts = [self.logical_cores]
+            try: counts.append(len(os.sched_getaffinity(0)))
+            except (AttributeError, OSError): pass
+            try:
+                quota, period = open('/sys/fs/cgroup/cpu.max').read().split()
+                if quota != 'max': counts.append(max(1, int(int(quota) / int(period))))
+            except (OSError, ValueError): pass
+            try:
+                q = int(open('/sys/fs/cgroup/cpu/cpu.cfs_quota_us').read())
+                p = int(open('/sys/fs/cgroup/cpu/cpu.cfs_period_us').read())
+                if q > 0 and p > 0: counts.append(max(1, q // p))
+            except (OSError, ValueError): pass
+            self.effective_cores = min(counts)
+        except Exception:
+            pass
         self.ram_total_mb   = psutil.virtual_memory().total // (1024 ** 2)
         self.huge_pages     = 'UNKNOWN'
         self.machine_name   = 'None'
@@ -1073,6 +1093,7 @@ def server_configure_worker(config):
         'mac_address'    : config.mac_address,    # Used to softly verify the Machine IDs
         'logical_cores'  : config.logical_cores,  # Logical cores, to differentiate hyperthreads
         'physical_cores' : config.physical_cores, # Physical cores, to differentiate hyperthreads
+        'effective_cores': config.effective_cores, # Quota-aware usable cores (containers)
         'ram_total_mb'   : config.ram_total_mb,   # Total RAM on the system, to avoid over assigning
         'huge_pages'     : config.huge_pages,     # Transparent Huge Pages: always, madvise, never, or UNKNOWN
         'machine_id'     : config.machine_id,     # Assigned value, or None. Will be replaced if wrong

@@ -28,6 +28,7 @@
             <tr><td class="td-label">CPU Flags</td><td><pre>{{machine|cpuflagsBlock}}</pre></td></tr>
             <tr><td class="td-label">Logical Cores</td><td>{{machine.info.logical_cores}}</td></tr>
             <tr><td class="td-label">Physical Cores</td><td>{{machine.info.physical_cores}}</td></tr>
+            <tr><td class="td-label">Usable Cores</td><td>{{machine.info.effective_cores|default:"n/a (no cgroup quota)"}}</td></tr>
             <tr><td class="td-label">Total RAM (MB)</td><td>{{machine.info.ram_total_mb}}</td></tr>
             <tr><td class="td-label">Huge Pages</td><td>{{machine.info.huge_pages|default:"UNKNOWN"}}</td></tr>
             <tr><td class="td-label">Syzygy WDL</td><td>{{machine.info.syzygy_max}}-Man</td></tr>
