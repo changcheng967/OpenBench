@@ -159,10 +159,12 @@ def prettyDevName(test):
     return prettyName(test.dev.name)
 
 def testIdToPrettyName(test_id):
-    return prettyName(OpenBench.models.Test.objects.get(id=test_id).dev.name)
+    try: return prettyName(OpenBench.models.Test.objects.get(id=test_id).dev.name)
+    except OpenBench.models.Test.DoesNotExist: return 'deleted test #%d' % (test_id)
 
 def testIdToTimeControl(test_id):
-    return OpenBench.models.Test.objects.get(id=test_id).dev_time_control
+    try: return OpenBench.models.Test.objects.get(id=test_id).dev_time_control
+    except OpenBench.models.Test.DoesNotExist: return 'N/A'
 
 def cpuflagsBlock(machine, N=8):
 
