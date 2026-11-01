@@ -253,10 +253,16 @@ def download_network(server, username, password, engine, net_name, net_sha, net_
             decompressor = zstandard.ZstdDecompressor().decompressobj()
 
         # Write the content out to the net_path in kb chunks
+        import time as _time
+        _t0, _bytes = _time.time(), 0
         with open(net_path, 'wb') as fout:
             for chunk in request.iter_content(chunk_size=1024):
                 if chunk: fout.write(decompressor.decompress(chunk) if decompressor else chunk)
+                _bytes += len(chunk)
             fout.flush()
+        _dt = _time.time() - _t0
+        if _dt > 0.5 and _bytes > (1 << 20):
+            print ('Downloaded %.1f MB in %.1fs = %.1f Mbit/s' % (_bytes / (1 << 20), _dt, _bytes * 8 / _dt / 1e6))
 
     else:
         print ('Found %s (%s) for %s' % (net_name, net_sha, engine))

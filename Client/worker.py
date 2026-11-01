@@ -115,6 +115,13 @@ class Configuration:
         self.server      = args.server
         self.threads     = int(args.threads) if args.threads != 'auto' else self.physical_cores
         self.sockets     = int(args.nsockets)
+        # Each game runs TWO engines at 1 thread: -T beyond cpu_count//2
+        # oversubscribes and produces FEWER games, not more. Warn, don't block.
+        _cores = os.cpu_count() or 1
+        if self.threads * 2 > _cores:
+            print ('[NOTE] -T %d on %d logical cores: each game uses 2 threads,'
+                   ' so -T above %d oversubscribes (fewer games, not more)' %
+                   (self.threads, _cores, max(1, _cores // 2)))
         self.identity    = args.identity if args.identity else 'None'
         self.syzygy_path = args.syzygy   if args.syzygy   else None
         self.fleet       = args.fleet    if args.fleet    else False
@@ -1383,8 +1390,13 @@ def parse_arguments(client_args):
     )
 
     # Arguments specific to worker.py
-    p.add_argument('-T', '--threads' , help='Total Threads'               , required=True      )
-    p.add_argument('-N', '--nsockets', help='Number of Sockets'           , required=True      )
+    # -T/-N optional (Luminex fork): when omitted, pick sane defaults for the
+    # machine — one game per two physical-ish cores (each game = 2 engines x
+    # 1 thread), and warn loudly when a hand-picked -T oversubscribes, which
+    # produces FEWER games, not more.
+    cores = os.cpu_count() or 1
+    p.add_argument('-T', '--threads' , help='Total Threads (default: auto = max(1, cpu_count//2))', required=False, default=max(1, cores // 2), type=int)
+    p.add_argument('-N', '--nsockets', help='Number of Sockets'           , required=False, default=1, type=int)
     p.add_argument('-I', '--identity', help='Machine pseudonym'           , required=False     )
     p.add_argument(      '--syzygy'  , help='Syzygy WDL'                  , required=False     )
     p.add_argument(      '--fleet'   , help='Fleet Mode'                  , action='store_true')
