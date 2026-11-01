@@ -241,9 +241,14 @@ def network_download_link(workload, branch):
 
 def workload_url(workload):
 
-    # Might be a workload id
+    # Might be a workload id. Log events can outlive their Test (tests get
+    # deleted between campaigns) — render a dead reference as inert text
+    # instead of taking the whole /errors/ page down.
     if type(workload) == int:
-        workload = OpenBench.models.Test.objects.get(id=workload)
+        try:
+            workload = OpenBench.models.Test.objects.get(id=workload)
+        except OpenBench.models.Test.DoesNotExist:
+            return '#deleted-test-%d' % (workload)
 
     # Differentiate between Tunes, Datagen, and regular Tests
     mapping = { 'SPSA' : 'tune', 'DATAGEN' : 'datagen' }
