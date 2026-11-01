@@ -28,6 +28,31 @@ import subprocess
 import tempfile
 import zipfile
 
+# (Luminex fork) Workers behind the GFW get GitHub archive downloads reset
+# mid-connection. git's url.insteadOf rewrite does NOT cover the client's
+# plain requests.get() downloads, so an env-var proxy prefix is honored for
+# every github.com fetch: export OPENBENCH_GH_PROXY=https://gh-proxy.com
+# Content integrity is unaffected: every artifact is sha-verified after
+# download (networks, books, bench).
+GH_PROXY = os.environ.get('OPENBENCH_GH_PROXY', 'https://gh-proxy.com').rstrip('/')
+
+def gh_get(url, **kwargs):
+    """Fetch a URL. github.com fetches try direct first and automatically fall
+    back to the GH proxy (proven reliable from GFW-blocked networks). Set
+    OPENBENCH_GH_PROXY to force a specific proxy (or to the direct URL's
+    scheme+host to disable the fallback)."""
+    if not url.startswith('https://github.com'):
+        return requests.get(url, **kwargs)
+    forced = os.environ.get('OPENBENCH_GH_PROXY')
+    if forced:
+        print('Fetching via GH proxy [%s]' % (GH_PROXY))
+        return requests.get('%s/%s' % (GH_PROXY, url), **kwargs)
+    try:
+        return requests.get(url, **kwargs)
+    except requests.RequestException:
+        print('Direct GitHub fetch failed; retrying via [%s]' % (GH_PROXY))
+        return requests.get('%s/%s' % (GH_PROXY, url), **kwargs)
+
 # Without zstandard, we simply download uncompressed Networks
 try: import zstandard
 except ImportError: zstandard = None
@@ -212,7 +237,7 @@ def download_opening_book(book_sha, book_source, book_name):
             # Download the zip file from Github
             zip_path = os.path.join(temp_dir, '%s.zip' % (book_name))
             with open(zip_path, 'wb') as zip_file:
-                zip_file.write(requests.get(book_source).content)
+                zip_file.write(gh_get(book_source).content)
 
             # Unzip the book to a directory
             unzip_path = os.path.join(temp_dir, book_name)
@@ -295,7 +320,7 @@ def prepare_engine(engine, net_path, branch, source, make_path, out_path, privat
         # Download the zip file from Github
         zip_path = os.path.join(temp_dir, '%s-tmp' % (engine))
         with open(zip_path, 'wb') as zip_file:
-            zip_file.write(requests.get(source, headers=headers).content)
+            zip_file.write(gh_get(source, headers=headers).content)
 
         # Unzip the engine to a directory called <engine>
         unzip_path = os.path.join(temp_dir, engine)

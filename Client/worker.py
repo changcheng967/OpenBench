@@ -64,7 +64,8 @@ from client import try_forever
 # 54: fork adds NNUEFile injection for runtime-loading engines (Luminex).
 # Bumped deliberately so a worker still running upstream's v53 client is
 # rejected by the server instead of silently producing net-less tests.
-CLIENT_VERSION   = 54 # Client version to send to the Server
+# 55: GitHub download auto-fallback through gh-proxy for GFW-blocked workers.
+CLIENT_VERSION   = 55 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -995,7 +996,7 @@ def server_configure_match_runner(config, name, build_func):
     # Download a .zip archive of the git-ref from the specified repo
     repo_url, repo_ref = data['%s_repo_url' % name], data['%s_repo_ref' % name]
     print ('> Downloading %s from %s' % (repo_ref, repo_url))
-    response = requests.get(url_join(repo_url, 'archive', '%s.zip' % repo_ref))
+    response = utils.gh_get(url_join(repo_url, 'archive', '%s.zip' % repo_ref))
 
     with tempfile.TemporaryDirectory() as temp_dir:
 
