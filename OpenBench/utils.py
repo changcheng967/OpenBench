@@ -204,8 +204,7 @@ def group_active_tests_by_priority(active):
 
 
 def getRecentMachines(minutes=2):
-    target = datetime.datetime.utcnow()
-    target = target.replace(tzinfo=timezone.utc)
+    target = datetime.datetime.now(datetime.timezone.utc)
     target = target - datetime.timedelta(minutes=minutes)
     return Machine.objects.filter(updated__gte=target)
 
