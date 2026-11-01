@@ -713,6 +713,11 @@ def verify_worker(function):
         if machine.secret != args[0].POST['secret']:
             return JsonResponse({ 'error' : 'Bad Client Version: Invalid Secret Token' })
 
+        # (Luminex fork) Every authenticated request is proof of life: refresh
+        # the row so the machines page Online status tracks polling, not just
+        # the rare NPS reports (auto_now only fires on save).
+        machine.save(update_fields=['updated'])
+
         # Otherwise, carry on, and pass along the machine
         return function(*args, machine)
 
