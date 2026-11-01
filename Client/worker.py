@@ -1318,6 +1318,8 @@ def idle_bench_report(config, force=False):
     try:
         binaries = [b for b in _glob.glob('Engines/*') if os.path.isfile(b)]
         if not binaries:
+            print ('[NOTE] Idle benchmark skipped: no cached engine yet '
+                   '(the first claimed workload builds one)')
             return
         binary = max(binaries, key=os.path.getmtime)
         threads = max(1, int(config.threads))

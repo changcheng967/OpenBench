@@ -763,8 +763,17 @@ def client_worker_info(request):
     if info.get('client_ver') != expected_ver:
         return JsonResponse({ 'error' : 'Bad Client Version: Expected %d' % (expected_ver)})
 
-    # Create a new Machine for this session
-    machine = Machine(user=user, info=info)
+    # (Luminex fork) Reuse the Machine row for a physical box across client
+    # restarts and version re-syncs. Upstream creates a fresh row per session,
+    # which litters the machines list with ghosts of the same hardware. The
+    # client already reports mac_address exactly for identifying machines.
+    machine = None
+    for existing in Machine.objects.filter(user=user):
+        if existing.info.get('mac_address') == info.get('mac_address'):
+            machine = existing
+            break
+    if machine is None:
+        machine = Machine(user=user, info=info)
 
     # Save the machine's latest information and Secret Token for this session
     machine.info   = info
