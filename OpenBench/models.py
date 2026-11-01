@@ -77,6 +77,9 @@ class EngineConfig(Model):
             'compilers' : self.build_compilers.split(),
             'cpuflags'  : self.build_cpuflags.split(),
             'systems'   : self.build_systems.split(),
+            # (Luminex fork) clients need the source archive URL to build an
+            # engine WITHOUT a workload (idle NPS benchmark on fresh machines)
+            'source'    : self.source,
         }
 
     # Clients cache the build checksum, and restart when the Server's differs.
