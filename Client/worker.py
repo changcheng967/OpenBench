@@ -1304,6 +1304,20 @@ def safe_run_benchmarks(config, branch, engine):
 IDLE_BENCH_INTERVAL = 30 * 60
 _next_idle_bench = [0.0]
 
+def idle_registered_sha(config):
+    """The source sha currently registered on the server for the first engine
+    this machine can build, or None if unreachable."""
+    try:
+        target = utils.url_join(config.server, 'clientGetBuildInfo')
+        builds = requests.get(target, timeout=TIMEOUT_HTTP).json()
+        for engine, build in builds.items():
+            if engine in config.compilers and not (build.get('cpuflags') and
+                    any(f not in config.cpu_flags for f in build['cpuflags'])):
+                return build['source'].rstrip('.zip').rsplit('/', 1)[-1][:8].upper()
+    except Exception:
+        pass
+    return None
+
 def idle_build_engine(config):
     """(Luminex fork) Build the newest registered engine this machine supports,
     without a workload. Uses the same build path as real workloads (source
@@ -1352,7 +1366,15 @@ def idle_bench_report(config, force=False):
             # every machine reports real NPS even before its first workload.
             print ('[NOTE] No cached engine; building one for the idle benchmark')
             binaries = [os.path.join('Engines', idle_build_engine(config))]
+        # Rebuild when the newest cached engine predates the registered source:
+        # a stale binary benches an old build (e.g. perft-based NPS from before
+        # the search-probe bench change) and mislabels the machine forever.
+        current_sha = idle_registered_sha(config)
         binary = max(binaries, key=os.path.getmtime)
+        if current_sha and current_sha not in os.path.basename(binary):
+            print ('[NOTE] Cached engine predates the registered source; rebuilding')
+            binaries = [os.path.join('Engines', idle_build_engine(config))]
+            binary = max(binaries, key=os.path.getmtime)
         threads = max(1, int(config.threads))
         print ('\nIdle benchmark of %s x%d (machine NPS refresh)' % (os.path.basename(binary), threads))
         speeds = [s for _b, s in bench.multi_core_bench(binary, threads)]
