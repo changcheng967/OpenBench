@@ -256,9 +256,13 @@ def workload_url(workload):
 
 def workload_pretty_name(workload):
 
-    # Might be a workload id
+    # Might be a workload id; dead references render as inert text (tests
+    # are deleted between campaigns, log events outlive them)
     if type(workload) == int:
-        workload = OpenBench.models.Test.objects.get(id=workload)
+        try:
+            workload = OpenBench.models.Test.objects.get(id=workload)
+        except OpenBench.models.Test.DoesNotExist:
+            return 'deleted test #%d' % (workload)
 
     # Convert commit sha's to just the first 16 characters
     if re.search('^[0-9a-fA-F]{40}$', workload.dev.name):

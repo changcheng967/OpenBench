@@ -1392,11 +1392,35 @@ def parse_arguments(client_args):
 
     # Arguments specific to worker.py
     # -T/-N optional (Luminex fork): when omitted, pick sane defaults for the
-    # machine — one game per two physical-ish cores (each game = 2 engines x
-    # 1 thread), and warn loudly when a hand-picked -T oversubscribes, which
-    # produces FEWER games, not more.
-    cores = os.cpu_count() or 1
-    p.add_argument('-T', '--threads' , help='Total Threads (default: auto = max(1, cpu_count//2))', required=False, default=max(1, cores // 2), type=int)
+    # machine — one game per two cores (each game = 2 engines x 1 thread),
+    # based on the EFFECTIVE core count, and warn loudly when a hand-picked
+    # -T oversubscribes, which produces FEWER games, not more.
+    def effective_cores():
+        """Cores the container may actually use. os.cpu_count() reports the
+        HOST (e.g. 112) inside containers whose cgroup quota allows far fewer
+        (e.g. 14) — sizing -T from the host count oversubscribes 8x."""
+        counts = [os.cpu_count() or 1]
+        try: # CPU affinity (pinning)
+            counts.append(len(os.sched_getaffinity(0)))
+        except (AttributeError, OSError):
+            pass
+        try: # cgroup v2 quota (docker --cpus, k8s limits)
+            quota, period = open('/sys/fs/cgroup/cpu.max').read().split()
+            if quota != 'max':
+                counts.append(max(1, int(int(quota) / int(period))))
+        except (OSError, ValueError):
+            pass
+        try: # cgroup v1 quota
+            q = int(open('/sys/fs/cgroup/cpu/cpu.cfs_quota_us').read())
+            p = int(open('/sys/fs/cgroup/cpu/cpu.cfs_period_us').read())
+            if q > 0 and p > 0:
+                counts.append(max(1, q // p))
+        except (OSError, ValueError):
+            pass
+        return min(counts)
+
+    cores = effective_cores()
+    p.add_argument('-T', '--threads' , help='Total Threads (default: auto = max(1, effective_cores//2))', required=False, default=max(1, cores // 2), type=int)
     p.add_argument('-N', '--nsockets', help='Number of Sockets'           , required=False, default=1, type=int)
     p.add_argument('-I', '--identity', help='Machine pseudonym'           , required=False     )
     p.add_argument(      '--syzygy'  , help='Syzygy WDL'                  , required=False     )

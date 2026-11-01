@@ -483,7 +483,11 @@ def events_errors(request, page=1):
 def machines(request, pk=None):
 
     if pk == None:
-        data = { 'machines' : OpenBench.utils.getRecentMachines() }
+        # 30-minute window for the LIST: builds stall polls for minutes at a
+        # time, and a machine vanishing from the table mid-compile looks like
+        # a disconnection. The 2-minute liveness window stays for actual
+        # workload-assignment decisions elsewhere.
+        data = { 'machines' : OpenBench.utils.getRecentMachines(minutes=30) }
         return render(request, 'machines.html', data)
 
     try:
