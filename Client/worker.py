@@ -64,8 +64,8 @@ from client import try_forever
 # 54: fork adds NNUEFile injection for runtime-loading engines (Luminex).
 # Bumped deliberately so a worker still running upstream's v53 client is
 # rejected by the server instead of silently producing net-less tests.
-# 55: GitHub download auto-fallback through gh-proxy for GFW-blocked workers.
-CLIENT_VERSION   = 55 # Client version to send to the Server
+# 56: idle benchmark keeps machine NPS alive without running tests.
+CLIENT_VERSION   = 56 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1298,6 +1298,31 @@ def safe_run_benchmarks(config, branch, engine):
     return speed
 
 
+IDLE_BENCH_INTERVAL = 30 * 60
+_next_idle_bench = [0.0]
+
+def idle_bench_report(config, force=False):
+    """(Luminex fork) Keep the machines page NPS column alive even while no
+    tests are running: bench the newest CACHED engine (no build, no net) and
+    report it through the normal NPS channel. Skips silently on machines that
+    have not built an engine yet — their first workload claim fills it in."""
+    import time as _t, glob as _glob
+    if not force and _t.time() < _next_idle_bench[0]:
+        return
+    _next_idle_bench[0] = _t.time() + IDLE_BENCH_INTERVAL
+    try:
+        binaries = [b for b in _glob.glob('Engines/*') if os.path.isfile(b)]
+        if not binaries:
+            return
+        binary = max(binaries, key=os.path.getmtime)
+        print ('\nIdle benchmark of %s (machine NPS refresh)' % (os.path.basename(binary)))
+        speed, nodes = bench.run_benchmark(binary, 1, 1, None)
+        ServerReporter.report_nps(config, speed, speed)
+        print ('Machine speed reported: %d nps' % (speed))
+    except Exception as error:
+        print ('[NOTE] Idle benchmark skipped: %s' % (error))
+
+
 def build_runner_command(config, dev_cmd, base_cmd, scale_factor, timestamp, runner_idx):
 
     flags  = ' ' + MatchRunner.basic_settings(config)
@@ -1468,6 +1493,10 @@ def run_openbench_worker(client_args):
     if IS_LINUX:
         set_runner_permissions()
 
+    # Report machine NPS right away (if an engine is already cached), then
+    # keep it fresh from the idle branch of the main loop
+    idle_bench_report(config, force=True)
+
     # Cleanup in case openbench.exit still exists
     if os.path.isfile('openbench.exit'):
         os.remove('openbench.exit')
@@ -1493,7 +1522,9 @@ def run_openbench_worker(client_args):
             elif config.fleet: time.sleep(TIMEOUT_ERROR); sys.exit()
 
             # In either case, wait before requesting again
-            else: time.sleep(TIMEOUT_WORKLOAD)
+            else:
+                time.sleep(TIMEOUT_WORKLOAD)
+                idle_bench_report(config)
 
         # Caught by client.py, prompting a Client Update
         except BadVersionException:
