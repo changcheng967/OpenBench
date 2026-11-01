@@ -1,4 +1,9 @@
-Django==6.1.2
+# The server runs the latest Django (Python 3.14). Workers never import
+# Django, but some deployment buildpacks pip-install this root file on the
+# worker anyway — so the pin is conditional: old-Python workers get an
+# installable (unused) 4.2 instead of failing the build.
+Django==6.1.2; python_version >= "3.12"
+Django==4.2.30; python_version < "3.12"
 django-htmlmin==0.11.0
 requests
 scipy
