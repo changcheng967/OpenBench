@@ -123,7 +123,10 @@ class Configuration:
             print ('[NOTE] -T %d on %d logical cores: each game uses 2 threads,'
                    ' so -T above %d oversubscribes (fewer games, not more)' %
                    (self.threads, _cores, max(1, _cores // 2)))
-        self.identity    = args.identity if args.identity else 'None'
+        # Default the machine name to the hostname so the machines page shows
+        # something identifiable instead of the literal string "None"
+        import socket as _socket
+        self.identity    = args.identity if args.identity else _socket.gethostname()
         self.syzygy_path = args.syzygy   if args.syzygy   else None
         self.fleet       = args.fleet    if args.fleet    else False
         self.noisy       = args.noisy    if args.noisy    else False
@@ -1303,9 +1306,11 @@ _next_idle_bench = [0.0]
 
 def idle_bench_report(config, force=False):
     """(Luminex fork) Keep the machines page NPS column alive even while no
-    tests are running: bench the newest CACHED engine (no build, no net) and
-    report it through the normal NPS channel. Skips silently on machines that
-    have not built an engine yet — their first workload claim fills it in."""
+    tests are running: bench the newest CACHED engine at the worker's full
+    concurrency. Reports BOTH numbers using the existing columns —
+    dev_mnps = single-thread nps, base_mnps = all-thread total — so the row
+    reads "single / total". Skips on machines without a cached engine; their
+    first workload claim fills the numbers instead."""
     import time as _t, glob as _glob
     if not force and _t.time() < _next_idle_bench[0]:
         return
@@ -1315,10 +1320,15 @@ def idle_bench_report(config, force=False):
         if not binaries:
             return
         binary = max(binaries, key=os.path.getmtime)
-        print ('\nIdle benchmark of %s (machine NPS refresh)' % (os.path.basename(binary)))
-        speed, nodes = bench.run_benchmark(binary, 1, 1, None)
-        ServerReporter.report_nps(config, speed, speed)
-        print ('Machine speed reported: %d nps' % (speed))
+        threads = max(1, int(config.threads))
+        print ('\nIdle benchmark of %s x%d (machine NPS refresh)' % (os.path.basename(binary), threads))
+        speeds = [s for _b, s in bench.multi_core_bench(binary, threads)]
+        if None in speeds:
+            raise utils.OpenBenchBadBenchException('idle bench failed')
+        single, total = speeds[0], sum(speeds)
+        payload = {'nps': total, 'dev_nps': single, 'base_nps': total}
+        ServerReporter.report(config, 'clientSubmitNPS', payload)
+        print ('Machine speed reported: %d single / %d total nps' % (single, total))
     except Exception as error:
         print ('[NOTE] Idle benchmark skipped: %s' % (error))
 
