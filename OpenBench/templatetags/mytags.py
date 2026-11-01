@@ -207,6 +207,16 @@ def machine_name(machine_id):
 
 
 register = django.template.Library()
+
+def machine_status(machine):
+    """(Luminex fork) True if the worker polled within 2 minutes. Rows stay
+    listed for hours; this flag is what actually means online."""
+    from django.utils import timezone
+    import datetime as _dt
+    cutoff = timezone.now() - _dt.timedelta(minutes=2)
+    return machine.updated >= cutoff
+
+register.filter('machine_status', machine_status)
 register.filter('oneDigitPrecision', oneDigitPrecision)
 register.filter('twoDigitPrecision', twoDigitPrecision)
 register.filter('gitDiffLink', gitDiffLink)
