@@ -164,7 +164,19 @@ if __name__ == '__main__':
     if args.no_client_downloads and not has_worker():
         raise Exception('Client missing, and --no-client-downloads provided')
 
-    if args.clean or not has_worker():
+    def client_version_mismatch():
+        # Always compare against the server BEFORE handing off: a worker whose
+        # startup loop is stuck (e.g. GitHub downloads reset on GFW networks)
+        # would otherwise never reach the in-loop version check.
+        try:
+            import requests as _r, worker as _w
+            ref = _r.post(args.server.rstrip('/') + '/clientVersionRef/',
+                          data={'username': args.username, 'password': args.password}).json()
+            return ref.get('client_version') != _w.CLIENT_VERSION
+        except Exception:
+            return False  # server unreachable: keep old behavior
+
+    if args.clean or not has_worker() or client_version_mismatch():
         print ('[NOTE] Downloading Client...')
         try_forever(download_client_files, [args], 'Failed to download Client files')
 
