@@ -43,6 +43,10 @@ def gh_get(url, **kwargs):
     scheme+host to disable the fallback)."""
     if not url.startswith('https://github.com'):
         return requests.get(url, **kwargs)
+    # A default timeout is what makes the fallback work at all: the GFW
+    # sometimes STALLS a connection (no reset, no EOF) and requests without
+    # a timeout would hang on it forever instead of falling back.
+    kwargs.setdefault('timeout', 60)
     forced = os.environ.get('OPENBENCH_GH_PROXY')
     if forced:
         print('Fetching via GH proxy [%s]' % (GH_PROXY))
