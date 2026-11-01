@@ -126,7 +126,11 @@ def download_client_files(args):
     try: # Download the entire .zip for the branch / tag / commit ref
         repo_url = version_ref['client_repo_url']
         repo_ref = version_ref['client_repo_ref']
-        response = requests.get(url_join(repo_url, 'archive', '%s.zip' % (repo_ref)))
+        # Route github fetches through utils.gh_get: timeout + gh-proxy
+        # fallback for GFW networks (a stalled direct fetch here hangs the
+        # client's own update path forever)
+        import utils as _utils
+        response = _utils.gh_get(url_join(repo_url, 'archive', '%s.zip' % (repo_ref)))
         assert response.status_code == 200
 
     except:
