@@ -483,11 +483,9 @@ def events_errors(request, page=1):
 def machines(request, pk=None):
 
     if pk == None:
-        # Long window for the LIST: rows stay visible across builds and
-        # restarts; the per-row Online/Offline status column (fed by the
-        # machine_status template filter, 2-minute freshness) is what
-        # actually reflects liveness.
-        data = { 'machines' : OpenBench.utils.getRecentMachines(minutes=360) }
+        # Online machines only: rows vanish when the worker stops polling
+        # (2-minute freshness). History lives on the machine detail pages.
+        data = { 'machines' : OpenBench.utils.getRecentMachines(minutes=2) }
         return render(request, 'machines.html', data)
 
     try:
