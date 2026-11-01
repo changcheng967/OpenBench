@@ -126,11 +126,15 @@ def download_client_files(args):
     try: # Download the entire .zip for the branch / tag / commit ref
         repo_url = version_ref['client_repo_url']
         repo_ref = version_ref['client_repo_ref']
-        # Route github fetches through utils.gh_get: timeout + gh-proxy
-        # fallback for GFW networks (a stalled direct fetch here hangs the
-        # client's own update path forever)
-        import utils as _utils
-        response = _utils.gh_get(url_join(repo_url, 'archive', '%s.zip' % (repo_ref)))
+        # 60s timeout + gh-proxy fallback: on GFW networks a direct fetch
+        # stalls forever without the timeout, killing the update path
+        zip_url = url_join(repo_url, 'archive', '%s.zip' % (repo_ref))
+        proxy   = os.environ.get('OPENBENCH_GH_PROXY', 'https://gh-proxy.com').rstrip('/')
+        try:
+            response = requests.get(zip_url, timeout=60)
+        except requests.RequestException:
+            print('Direct GitHub fetch failed; retrying via [%s]' % proxy)
+            response = requests.get('%s/%s' % (proxy, zip_url), timeout=180)
         assert response.status_code == 200
 
     except:
