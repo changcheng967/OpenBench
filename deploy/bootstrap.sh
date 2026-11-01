@@ -125,6 +125,10 @@ chmod 600 "${ENV_FILE}"
 # ---------------------------------------------------------------------------
 say "Applying migrations"
 set -a; source "${ENV_FILE}"; set +a
+# Django steps must run INSIDE ${APP_DIR}: manage.py resolves sqlite paths
+# relative to the CWD, and a bootstrap from a separate source checkout would
+# otherwise try to create db.sqlite3 in the (read-only) checkout.
+cd "${APP_DIR}"
 sudo -u "${APP_USER}" env $(grep -v '^#' "${ENV_FILE}" | xargs) \
     "${APP_DIR}/.venv/bin/python" manage.py migrate --noinput
 
