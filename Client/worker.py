@@ -65,7 +65,7 @@ from client import try_forever
 # Bumped deliberately so a worker still running upstream's v53 client is
 # rejected by the server instead of silently producing net-less tests.
 # 60: force script dir onto sys.path for safe-path Pythons.
-CLIENT_VERSION   = 60 # Client version to send to the Server
+CLIENT_VERSION   = 61 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1405,6 +1405,20 @@ def idle_bench_report(config, force=False):
         payload = {'nps': total, 'dev_nps': single, 'base_nps': total}
         ServerReporter.report(config, 'clientSubmitNPS', payload)
         print ('Machine speed reported: %d single / %d total nps' % (single, total))
+    except utils.OpenBenchBuildFailedException as error:
+        print ('[NOTE] Idle benchmark skipped: %s' % (error.args[0] if error.args else error))
+        # The idle build has no test to attach to; still surface the compile
+        # log on the Events page instead of swallowing it (test_id 0 = no test).
+        logs = str(error.args[1]) if len(error.args) > 1 and error.args[1] else ''
+        if logs:
+            try:
+                ServerReporter.report(config, 'clientSubmitError', {
+                    'test_id': 0,
+                    'error'  : 'Idle build failed: %s' % (error.args[0] if error.args else error),
+                    'logs'   : logs[-20000:],
+                })
+            except Exception:
+                pass
     except Exception as error:
         print ('[NOTE] Idle benchmark skipped: %s' % (error))
 
