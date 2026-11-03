@@ -1,5 +1,5 @@
 {% load mytags %}
-<td class="test-author"><a href="/user/{{test.author}}">{{test.author|capfirst|slice:":6"}}</a></td>
+<td class="test-author"><a href="/user/{{test.author}}">{{test.author|capfirst}}</a></td>
 <td class="test-engine">{{test.dev_engine}}</td>
 <td class="test-name">
     <a href="{{test|workload_url}}">{{test|prettyDevName}}</a>
