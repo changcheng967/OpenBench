@@ -65,7 +65,7 @@ from client import try_forever
 # Bumped deliberately so a worker still running upstream's v53 client is
 # rejected by the server instead of silently producing net-less tests.
 # 60: force script dir onto sys.path for safe-path Pythons.
-CLIENT_VERSION   = 61 # Client version to send to the Server
+CLIENT_VERSION   = 62 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -242,6 +242,40 @@ class Configuration:
             print('%-16s | %s' % (engine, ['Missing', 'Found'][has_token]))
             if has_token: self.git_tokens[engine] = True
 
+    @staticmethod
+    def _cpuid_brand_fallback():
+        """Read the CPU brand string via a raw CPUID instruction when
+        py-cpuinfo returns "unknown" (containers mask /proc/cpuinfo).
+        The cpuid instruction reads silicon registers directly and cannot
+        be masked by the container runtime."""
+        try:
+            import subprocess, tempfile
+            src = '''
+#include <stdio.h>
+#include <cpuid.h>
+int main() {
+    char brand[49] = {0};
+    unsigned int *b = (unsigned int *)brand;
+    for (int i = 0; i < 3; i++)
+        __cpuid(0x80000002 + i, b[i*4], b[i*4+1], b[i*4+2], b[i*4+3]);
+    printf("%s", brand);
+    return 0;
+}
+'''
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.c',
+                                             delete=False) as f:
+                f.write(src)
+                csrc = f.name
+            exe = csrc.replace('.c', '')
+            subprocess.run(['gcc', '-o', exe, csrc],
+                           check=True, capture_output=True, timeout=10)
+            result = subprocess.run([exe], capture_output=True, text=True, timeout=5)
+            os.unlink(csrc)
+            os.unlink(exe)
+            return result.stdout.strip() or None
+        except Exception:
+            return None
+
     def scan_for_cpu_flags(self, data):
 
         print('\nScanning for CPU Flags...')
@@ -250,8 +284,14 @@ class Configuration:
         info   = cpuinfo.get_cpu_info()
         actual = [x.replace("_", "").replace(".", "").upper() for x in info.get('flags', [])]
 
-        # Set the CPU name which has to be done via global
+        # Set the CPU name which has to be done via global. py-cpuinfo
+        # returns "unknown" inside containers/k8s where /proc/cpuinfo is
+        # masked; fall back to reading the CPUID brand string directly
+        # via a tiny compiled helper (the cpuid instruction can't be
+        # masked by the container runtime).
         self.cpu_name = info.get('brand_raw', info.get('brand', 'Unknown'))
+        if self.cpu_name.strip().lower() in ('unknown', ''):
+            self.cpu_name = self._cpuid_brand_fallback() or self.cpu_name
 
         # This should cover virtually all compiler flags that we would care about
         desired  = ['POPCNT', 'BMI2']
