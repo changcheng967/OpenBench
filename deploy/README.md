@@ -78,28 +78,54 @@ Two things it does deliberately:
 
 ## Ingress
 
-You already run a Cloudflare Tunnel for the arena, so reuse it — it needs no open
-ports, no public IP, and gives you TLS for free.
+The live server sits behind a **named Cloudflare Tunnel**. The tunnel needs no
+open ports, Cloudflare supplies TLS, and the hostname never changes.
+
+- `https://bench.luminexchess.com` reaches gunicorn on `http://127.0.0.1:8000`
+  through the tunnel `luminex-openbench`.
+- DNS is a proxied CNAME `bench` → `<tunnel-id>.cfargotunnel.com`.
+  `cloudflared tunnel route dns` creates it.
+- The apex `luminexchess.com` is the engine's homepage and is hosted elsewhere;
+  this tunnel only answers for `bench`.
+
+Setup on the VM (x86_64 here; use the arm64 build of cloudflared on Ampere):
 
 ```bash
-# on the VM
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 \
-  -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
-cloudflared tunnel login
-cloudflared tunnel create openbench
-cloudflared tunnel route dns openbench bench.example.com
-cloudflared service install
+cloudflared tunnel login                      # prints a link: authorize the zone in a browser
+cloudflared tunnel create luminex-openbench   # writes ~/.cloudflared/<tunnel-id>.json
+cloudflared tunnel route dns luminex-openbench bench.luminexchess.com
+sudo install -d -m 755 /etc/cloudflared
+sudo install -m 600 ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
+sudo install -m 644 deploy/cloudflared-config.yml /etc/cloudflared/config.yml
+sudo install -m 644 deploy/cloudflared-openbench.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cloudflared-openbench
 ```
 
-Then point the tunnel at `http://127.0.0.1:8000` and set:
+Edit the tunnel id in `config.yml` if you create a new tunnel. The unit replaces
+`cloudflared service install`, which would also turn on cloudflared's
+self-updater. Then set, in `/opt/openbench/.env`:
 
 ```
-OPENBENCH_ALLOWED_HOSTS=bench.example.com
-OPENBENCH_CSRF_ORIGINS=https://bench.example.com
+OPENBENCH_ALLOWED_HOSTS=bench.luminexchess.com,.trycloudflare.com,localhost,127.0.0.1
+OPENBENCH_CSRF_ORIGINS=https://bench.luminexchess.com,<current quick-tunnel URL>
 ```
 
 `CSRF_TRUSTED_ORIGINS` is required for POST forms (login, test creation) behind
 HTTPS; without it the admin login silently 403s.
+
+**The quick-tunnel fallback.** The earlier trycloudflare quick tunnel still runs,
+as `openbench-tunnel.service` with `deploy/openbench-tunnel-keeper` installed in
+`/usr/local/bin`.
+- Its URL changes on every restart. The keeper writes the new URL to
+  `/home/ubuntu/current_bench_url`, rewrites the CSRF origins (permanent hostname
+  first) and restarts OpenBench.
+- Why it stays: some school and corporate networks reset TLS to domains
+  registered in the last ~30 days. On 2026-11-05, the day the domain was
+  registered, one network reset every connection to `luminexchess.com` while the
+  same address worked from the server.
+- Once no network you use blocks the domain, run
+  `sudo systemctl disable --now openbench-tunnel` and drop the trycloudflare
+  entries from `.env`.
 
 If you would rather not use Cloudflare, Oracle gives you a public IP — open
 80/443 in the VCN security list and put Caddy in front of gunicorn.

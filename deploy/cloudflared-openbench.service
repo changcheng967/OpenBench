@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloudflare named tunnel: bench.luminexchess.com -> OpenBench
+After=network-online.target openbench.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=always
+RestartSec=5
+# cloudflared only reads its config and credentials and dials out to Cloudflare.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

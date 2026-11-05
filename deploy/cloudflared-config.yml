@@ -1,0 +1,10 @@
+# Cloudflare named tunnel "luminex-openbench": bench.luminexchess.com -> OpenBench
+# (gunicorn on 127.0.0.1:8000). The DNS record is a proxied CNAME
+# bench -> f6314c69-cab8-424a-86c6-de2958850d9d.cfargotunnel.com.
+# Manage with: cloudflared tunnel info luminex-openbench  (as ubuntu; cert in ~/.cloudflared)
+tunnel: f6314c69-cab8-424a-86c6-de2958850d9d
+credentials-file: /etc/cloudflared/f6314c69-cab8-424a-86c6-de2958850d9d.json
+ingress:
+  - hostname: bench.luminexchess.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404
