@@ -136,13 +136,15 @@ class Configuration:
         self.server      = args.server
         self.threads     = int(args.threads) if args.threads != 'auto' else self.physical_cores
         self.sockets     = int(args.nsockets)
-        # Each game runs TWO engines at 1 thread: -T beyond cpu_count//2
-        # oversubscribes and produces FEWER games, not more. Warn, don't block.
-        _cores = os.cpu_count() or 1
-        if self.threads * 2 > _cores:
-            print ('[NOTE] -T %d on %d logical cores: each game uses 2 threads,'
+        # The two engines of a game take turns, and the waiting one blocks on
+        # stdin at 0% CPU, so a game keeps ONE core busy. -T up to the usable
+        # core count fills the machine; beyond it games share cores and
+        # produce FEWER games, not more. Warn, don't block.
+        _cores = self.effective_cores or os.cpu_count() or 1
+        if self.threads > _cores:
+            print ('[NOTE] -T %d on %d usable cores: each game keeps one core busy,'
                    ' so -T above %d oversubscribes (fewer games, not more)' %
-                   (self.threads, _cores, max(1, _cores // 2)))
+                   (self.threads, _cores, _cores))
         # Default the machine name to the hostname so the machines page shows
         # something identifiable instead of the literal string "None"
         import socket as _socket
@@ -1557,9 +1559,10 @@ def parse_arguments(client_args):
 
     # Arguments specific to worker.py
     # -T/-N optional (Luminex fork): when omitted, pick sane defaults for the
-    # machine — one game per two cores (each game = 2 engines x 1 thread),
-    # based on the EFFECTIVE core count, and warn loudly when a hand-picked
-    # -T oversubscribes, which produces FEWER games, not more.
+    # machine — one game per usable core (the engines of a game take turns and
+    # the waiting one sits at 0% CPU, so a game keeps one core busy), based on
+    # the EFFECTIVE core count, and warn loudly when a hand-picked -T
+    # oversubscribes, which produces FEWER games, not more.
     def effective_cores():
         """Cores the container may actually use. os.cpu_count() reports the
         HOST (e.g. 112) inside containers whose cgroup quota allows far fewer
@@ -1585,7 +1588,7 @@ def parse_arguments(client_args):
         return min(counts)
 
     cores = effective_cores()
-    p.add_argument('-T', '--threads' , help='Total Threads (default: auto = max(1, effective_cores//2))', required=False, default=max(1, cores // 2), type=int)
+    p.add_argument('-T', '--threads' , help='Concurrent games (default: auto = effective_cores, one game per core)', required=False, default=max(1, cores), type=int)
     p.add_argument('-N', '--nsockets', help='Number of Sockets'           , required=False, default=1, type=int)
     p.add_argument('-I', '--identity', help='Machine pseudonym'           , required=False     )
     p.add_argument(      '--syzygy'  , help='Syzygy WDL'                  , required=False     )
