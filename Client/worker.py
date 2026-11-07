@@ -66,7 +66,9 @@ from client import try_forever
 # rejected by the server instead of silently producing net-less tests.
 # 60: force script dir onto sys.path for safe-path Pythons.
 # 63: default -T to one game per usable core (was half the cores).
-CLIENT_VERSION   = 63 # Client version to send to the Server
+# 64: rounds-per-runner means rounds (one opening each); runners and genfens
+#     books step by whole rounds, so no opening is played twice.
+CLIENT_VERSION   = 64 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -553,13 +555,13 @@ class MatchRunner:
     @staticmethod
     def book_settings(config, runner_idx):
 
+        # Each round reads one book entry, with or without reverses, so the
+        # runners of a workload take consecutive blocks of `rounds` entries
+        rounds = config.workload['distribution']['rounds-per-runner']
+
         # DATAGEN creates their own book
         if config.workload['test']['type'] == 'DATAGEN':
-
-            # -repeat might not be applied, so handle the book offsets
-            no_reverse = not config.workload['test']['play_reverses']
-            pairs      = config.workload['distribution']['rounds-per-runner'] // 2
-            start      = 1 + (runner_idx * pairs * (1 + no_reverse))
+            start = 1 + runner_idx * rounds
             return '-openings file=Books/openbench.genfens.epd format=epd order=sequential start=%d' % (start)
 
         # Can handle EPD and PGN Books, which must be specified
@@ -567,8 +569,7 @@ class MatchRunner:
         book_suffix = book_name.split('.')[-1]
 
         # Start position is determined partially by runner index
-        pairs = config.workload['distribution']['rounds-per-runner'] // 2
-        start = config.workload['test']['book_index'] + runner_idx * pairs
+        start = config.workload['test']['book_index'] + runner_idx * rounds
 
         return '-openings file=Books/%s format=%s order=random start=%d -srand %d' % (
             book_name, book_suffix, start, config.workload['test']['book_seed'])

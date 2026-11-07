@@ -281,11 +281,12 @@ def workload_to_dictionary(test, result, machine):
         workload['test']['book_seed' ] = test.id
         workload['test']['book_index'] = test.book_index
 
-        runner_cnt    = workload['distribution']['runner-count']
-        pairs_per_cnt = workload['distribution']['rounds-per-runner'] // 2
-        per_opening   = 2 if (test.test_mode == 'DATAGEN' and not test.play_reverses) else 1
+        # Every round opens with its own book entry, so the next workload
+        # starts after all of this one's
+        runner_cnt = workload['distribution']['runner-count']
+        rounds_per = workload['distribution']['rounds-per-runner']
 
-        test.book_index += runner_cnt * pairs_per_cnt * per_opening
+        test.book_index += runner_cnt * rounds_per
 
         if test.test_mode == 'DATAGEN':
             workload['test']['genfens_seeds'] = [
@@ -332,8 +333,17 @@ def game_distribution(test, machine):
     # SPSA is treated specially, if we are distributing many parameter sets at once
     is_multiple_spsa = test.test_mode == 'SPSA' and test.spsa_run.distribution_type == 'MULTIPLE'
 
+    # A round is one opening: a pair of games with colours reversed (the match
+    # runner's -games 2), or a single game for DATAGEN without reverses. Either
+    # way a runner plays 2 * workload_size games per concurrent slot, so the
+    # single-game case needs twice the rounds. (Upstream #314 renamed this
+    # count from games to rounds without halving it, which doubled every
+    # workload and, with the book index stepping by half, replayed openings.)
+    no_reverse = test.test_mode == 'DATAGEN' and not test.play_reverses
+    rounds     = test.workload_size * (1 if is_multiple_spsa else max_concurrency) * (2 if no_reverse else 1)
+
     return {
         'runner-count'      : spsa_count if is_multiple_spsa else worker_sockets,
         'concurrency-per'   : 2 if is_multiple_spsa else max_concurrency,
-        'rounds-per-runner' : 2 * test.workload_size * (1 if is_multiple_spsa else max_concurrency),
+        'rounds-per-runner' : rounds,
     }
