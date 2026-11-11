@@ -532,7 +532,22 @@ def networks(request, engine=None, action=None, name=None, client=False):
         networks = Network.objects.all()
         if engine and EngineConfig.objects.filter(name=engine).exists():
             networks = networks.filter(engine=engine)
-        return render(request, 'networks.html', { 'networks' : list(networks.order_by('-id').values()) })
+        networks = list(networks.order_by('-id').values())
+
+        # The unfinished tests that use each Network, by its sha256
+        in_use = {}
+        for test in Test.objects.filter(finished=False, deleted=False).values('id', 'dev_network', 'base_network'):
+            for sha in { test['dev_network'], test['base_network'] } - { '', None }:
+                in_use.setdefault(sha, []).append(test['id'])
+        for network in networks:
+            network['tests'] = sorted(in_use.get(network['sha256'], []))
+
+        # Engine and Author columns only earn their space when they differ between rows
+        return render(request, 'networks.html', {
+            'networks'    : networks,
+            'show_engine' : len({ n['engine'] for n in networks }) > 1,
+            'show_author' : len({ n['author'] for n in networks }) > 1,
+        })
 
     # Require logins. Clients will be artifically logged in
     if not request.user.is_authenticated:

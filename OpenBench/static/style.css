@@ -388,6 +388,23 @@ td pre {
     transform: scale(0.70);
 }
 
+#content .network-legend {
+    color: var(--color-font2);
+    margin: 0 0 0.75em 0;
+    max-width: 48em;
+    white-space: normal;
+    line-height: 1.5;
+}
+
+#content .network-added {
+    color: var(--color-font2);
+    white-space: nowrap;
+}
+
+#content .network-tests a {
+    margin-right: 0.6em;
+}
+
 
 #content .numeric {
     text-align: right;
