@@ -11,15 +11,27 @@ Group=openbench
 WorkingDirectory=/opt/openbench
 EnvironmentFile=/opt/openbench/.env
 
-# 3 workers is plenty: this process only serves a job queue and small API calls.
-# It does NO chess computation — all searching happens on the worker clients.
-# --timeout 120 covers PGN uploads and zstd compression of large networks.
+# This process only serves a job queue and small API calls. It does NO chess
+# computation: all searching happens on the worker clients.
+#
+# The server is a 1 GB VM with a burstable CPU (VM.Standard.E2.1.Micro). Three
+# workers of ~145 MB each pushed ~600 MB into swap, and pages stalled while a
+# cold worker paged back in (index page: up to 2.2 s on the server itself). Two
+# workers with four threads each fit in memory and still serve eight requests
+# at once (index page: 0.17-0.27 s). Workers are not recycled: they start at
+# ~140 MB (scipy alone is ~73 MB) and grew only to ~150 MB in three days, while
+# a fresh worker spends ~3 s importing on this CPU before its first answer.
+# --timeout 120 covers PGN uploads and network downloads.
+#
+# The access log ends with each request's duration in seconds (%(L)s), so slow
+# pages show up in `journalctl -u openbench`. systemd needs every % written as %%.
 ExecStart=/opt/openbench/.venv/bin/gunicorn OpenSite.wsgi:application \
     --bind 127.0.0.1:8000 \
-    --workers 3 \
-    --threads 2 \
+    --workers 2 \
+    --threads 4 \
     --timeout 120 \
     --access-logfile - \
+    --access-logformat '%%(h)s %%(l)s %%(u)s %%(t)s "%%(r)s" %%(s)s %%(b)s "%%(f)s" "%%(a)s" %%(L)s' \
     --error-logfile -
 
 Restart=always
