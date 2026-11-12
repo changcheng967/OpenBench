@@ -32,7 +32,7 @@
                 <td>{{gauntlet.first.dev_time_control}}</td>
                 {% with fit=gauntlet.fit %}
                     {% if fit %}
-                        <td class="numeric">{{fit.rating|floatformat:0}} ± {{fit.error|floatformat:0}}</td>
+                        <td class="numeric">{{fit.rating|floatformat:0}} ± {{fit.error_with_spread|floatformat:0}}</td>
                     {% else %}
                         <td class="numeric">Pending</td>
                     {% endif %}

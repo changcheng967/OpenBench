@@ -660,6 +660,10 @@ td pre {
     white-space: normal;
 }
 
+#content .gauntlet-table tr.gauntlet-removed td {
+    opacity: 0.5;
+}
+
 #content .gauntlet-opponents input[type="checkbox"] {
     cursor: pointer;
 }

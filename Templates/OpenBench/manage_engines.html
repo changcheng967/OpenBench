@@ -49,7 +49,7 @@
                 <td>{{config.name}}</td>
                 <td><a href="{{config.source}}">{{config.source|removePrefix:"https://github.com/"}}</a></td>
                 <td>{{config.rated_branch}}</td>
-                <td>{% for name, rating in config.ratings.items %}{{name}} {{rating}}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+                <td>{% for name, rating in config.ratings|pairs %}{{name}} {{rating}}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
 
                 <td style="text-align: center">
                     {% if config.enabled %}

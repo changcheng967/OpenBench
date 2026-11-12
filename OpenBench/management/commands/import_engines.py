@@ -32,8 +32,10 @@
 #   "rated" : { "branch" : "v37.0", "sha" : "<commit>", "bench" : 123456,
 #               "ratings" : { "CCRL Blitz" : 3417 } }
 #
-# Only the ratings are required. Without a sha, the branch is looked up on
-# Github when the Engine is first played against.
+# The ratings and the branch are required; a source that is itself a .zip
+# needs no branch. Without a sha, the branch is looked up on Github when the
+# Engine is first played against. A file without "rated" leaves the rated
+# build of an existing Engine as it is.
 
 import json
 import os
@@ -96,7 +98,7 @@ def engine_fields(fname, name, conf):
     if (error := verify_ratings(rated.get('ratings', {}))):
         raise CommandError('%s %s' % (fname, error))
 
-    return {
+    fields = {
         'private'         : conf['private'],
         'nps'             : conf['nps'],
         'source'          : conf['source'],
@@ -105,11 +107,17 @@ def engine_fields(fname, name, conf):
         'build_cpuflags'  : ' '.join(build.get('cpuflags', [])),
         'build_systems'   : ' '.join(build.get('systems', [])),
         'presets'         : presets,
-        'rated_branch'    : rated.get('branch', ''),
-        'rated_sha'       : rated.get('sha', ''),
-        'rated_bench'     : rated.get('bench', 0),
-        'ratings'         : rated.get('ratings', {}),
     }
+
+    if 'rated' in conf:
+        fields.update({
+            'rated_branch' : rated.get('branch', ''),
+            'rated_sha'    : rated.get('sha', ''),
+            'rated_bench'  : rated.get('bench', 0),
+            'ratings'      : rated.get('ratings', {}),
+        })
+
+    return fields
 
 def expand_path(path):
 

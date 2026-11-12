@@ -143,6 +143,17 @@ class RatingFitTests(TestCase):
         self.assertAlmostEqual(fit['rating'], 3000 + 1.35 * OpenBench.stats.logistic_elo(0.6), places=3)
         self.assertAlmostEqual(fit['scale'], 1.35, places=6)
 
+        # It is not known, though, and the errors have to say so: the scale
+        # could be anything that the prior allows, and a rating that is 300
+        # points from its one anchor moves with it
+        level = fit_rating([(3000, 400, 200.0, 60.0)])
+        apart = fit_rating([(3000, 400, 340.0, 40.0)])
+
+        self.assertAlmostEqual(level['scale_error'], 1.96 * 0.4, places=2)
+        self.assertLess(level['error'], 30.0)
+        self.assertAlmostEqual(apart['rating'], 3000 + OpenBench.stats.logistic_elo(0.85), places=3)
+        self.assertGreater(apart['error'], 0.6 * (apart['rating'] - 3000))
+
         # Nor can opponents that share one rating
         fit = fit_rating([(3000, 400, 240.0, 60.0), (3000, 200, 100.0, 30.0)])
         self.assertAlmostEqual(fit['rating'], 3000 + OpenBench.stats.logistic_elo(340.0 / 600.0), places=3)
@@ -246,8 +257,9 @@ class RatingFitTests(TestCase):
         self.assertEqual(games, 200)
         self.assertAlmostEqual(scored, 100.0)
 
-        # 100 pairs, each varying by ((1)^2 * 20 + (0.5)^2 * 40) / 99 around 1 point
-        self.assertAlmostEqual(variance, 100 * 30.0 / 99)
+        # 100 pairs around 1 point: squared deviations of 1^2 * 20 + 0.5^2 * 40,
+        # and one more pair counted in at the widest spread, 0.5
+        self.assertAlmostEqual(variance, 30.0 + 0.5)
 
         test = Test(use_penta=False, use_tri=True)
         test.losses, test.draws, test.wins = 25, 50, 25
@@ -255,7 +267,29 @@ class RatingFitTests(TestCase):
         games, scored, variance = OpenBench.gauntlets.score_stats(test)
         self.assertEqual(games, 100)
         self.assertAlmostEqual(scored, 50.0)
-        self.assertAlmostEqual(variance, 100 * 12.5 / 99)
+        self.assertAlmostEqual(variance, 12.5 + 0.25)
+
+        # Four pairs that all ended alike are not a certain result
+        test = Test(use_penta=True, use_tri=False)
+        test.LL, test.LD, test.DD, test.DW, test.WW = 0, 4, 0, 0, 0
+
+        games, scored, variance = OpenBench.gauntlets.score_stats(test)
+        self.assertEqual((games, scored), (8, 2.0))
+        self.assertAlmostEqual(variance, 0.5)
+        self.assertGreater(fit_rating([(3726, games, scored, variance)])['error'], 100.0)
+
+        # And no games are no information at all
+        self.assertEqual(OpenBench.gauntlets.score_stats(Test(use_penta=True)), (0, 0.0, 0.0))
+
+    def test_two_opponents_report_no_spread(self):
+
+        # With two opponents, a disagreement between them is as well explained
+        # by the scale, so it must not be reported as a spread of the anchors
+
+        fit = fit_rating([(3454, 40, 19.0, 6.0), (3726, 8, 2.0, 0.5)])
+        self.assertEqual(fit['spread'], 0.0)
+        self.assertEqual(fit['error'], fit['error_with_spread'])
+        self.assertEqual(fit['opponents'], 2)
 
 class GauntletTests(TestCase):
 
@@ -807,10 +841,27 @@ class GauntletTests(TestCase):
         self.assertEqual(config.ratings, { 'CCRL Blitz' : 3531, 'CCI LTC' : 3387 })
         self.assertEqual(config.rated_sha, '1' * 40)
 
-        # Another branch is another commit, which is looked up again when played
+        # Another branch is another commit, which is looked up again when played.
+        # The bench left in the form was the old branch's, so it goes as well,
+        # to be read from the new commit
         self.client.post('/manage/engines/Sirius/edit/', { **form, 'rated_branch' : 'v9.1' })
         config.refresh_from_db()
-        self.assertEqual((config.rated_branch, config.rated_sha), ('v9.1', ''))
+        self.assertEqual((config.rated_branch, config.rated_sha, config.rated_bench), ('v9.1', '', 0))
+
+        self.create(opponents=['Sirius'])
+        config.refresh_from_db()
+        self.assertEqual(len(config.rated_sha), 40)
+        self.assertEqual(config.rated_bench, 7654321)
+        self.assertEqual(Test.objects.get().base.bench, 7654321)
+
+        # A bench that is entered together with a new branch is kept
+        self.client.post('/manage/engines/Sirius/edit/', { **form, 'rated_branch' : 'v9.2', 'rated_bench' : '424242' })
+        config.refresh_from_db()
+        self.assertEqual((config.rated_branch, config.rated_sha, config.rated_bench), ('v9.2', '', 424242))
+
+        # A form without the rated build leaves the page standing
+        partial = { key : value for key, value in form.items() if key not in ('rated_branch', 'rated_bench') }
+        self.assertEqual(self.client.post('/manage/engines/Sirius/edit/', partial).status_code, 302)
 
         response = self.client.post('/manage/engines/Sirius/edit/', { **form, 'ratings' : '{ "CCRL Blitz" : "strong" }' }, follow=True)
         self.assertContains(response, 'must be a number')
@@ -826,6 +877,13 @@ class GauntletTests(TestCase):
 
         self.assertContains(self.client.get('/manage/engines/Halogen/'), 'v16.0.0')
         self.assertContains(self.client.get('/manage/engines/'), 'CCRL Blitz 3720')
+
+        # A list may have any name, also one that a dictionary has a method for
+        self.client.post('/manage/engines/Sirius/edit/', { **form, 'ratings' : '{ "items" : 3000, "keys" : 3001 }' })
+        self.assertContains(self.client.get('/manage/engines/'), 'items 3000, keys 3001')
+
+        response = self.client.post('/manage/engines/Sirius/edit/', { **form, 'ratings' : '{ "CCRL Blitz\\n" : 3000 }' }, follow=True)
+        self.assertContains(response, 'Rating lists are named')
 
     def test_import_engines_reads_the_rated_build(self):
 
@@ -845,3 +903,122 @@ class GauntletTests(TestCase):
         self.assertEqual(config.ratings, { 'CCRL Blitz' : 3726 })
         self.assertEqual(config.build_path, 'src')
         self.assertIn(config, OpenBench.gauntlets.rated_engines())
+
+        # A file that says nothing of a rated build changes the build settings only
+        del conf['rated']
+        conf['build']['path'] = 'source'
+
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, 'Clover.json'), 'w') as fout:
+                json.dump(conf, fout)
+            call_command('import_engines', folder, stdout=io.StringIO())
+
+        config.refresh_from_db()
+        self.assertEqual(config.build_path, 'source')
+        self.assertEqual((config.rated_branch, config.rated_bench), ('v9.1', 1234567))
+        self.assertEqual(config.ratings, { 'CCRL Blitz' : 3726 })
+
+    def test_only_playable_engines_are_opponents(self):
+
+        # Ratings without a build to play them against are no opponent: the
+        # form would offer it, ticked, and then refuse to create anything
+        EngineConfig.objects.filter(name='Halogen').update(rated_branch='')
+
+        offered = [config.name for config in OpenBench.gauntlets.rated_engines()]
+        self.assertEqual(offered, ['Sirius', 'Stash-37'])
+
+        response = self.client.post('/gauntlet/new/', self.form(opponents=['Halogen']), follow=True)
+        self.assertContains(response, 'not an enabled Engine with ratings')
+
+        # An archive needs no branch, and plays with a bench of 0 unchecked
+        EngineConfig.objects.filter(name='Stash-37').update(rated_branch='', rated_bench=0)
+        self.create(opponents=['Stash-37'])
+        engine = Test.objects.get().base
+        self.assertEqual((engine.name, engine.sha, engine.bench), ('stash-37', 'stash-37', 0))
+
+    def test_strange_ids_and_numbers_are_turned_away(self):
+
+        self.create()
+
+        huge = '9' * 30
+        self.assertEqual(self.client.get('/gauntlet/%s/' % (huge)).url, '/index/')
+        self.assertEqual(self.client.get('/gauntlet/%s/STOP/' % (huge)).url, '/index/')
+        self.assertIn('error', self.client.get('/api/gauntlet/%s/' % (huge)).json())
+        self.assertEqual(self.client.get('/gauntlet/0/').url, '/index/')
+
+        # Not an id at all: the form opens as if nothing was asked for
+        for like in ('\u00b2', 'abc', '', huge):
+            response = self.client.get('/gauntlet/new/', { 'like' : like })
+            self.assertEqual(len(response.context['ticked']), 3)
+
+        response = self.client.post('/gauntlet/new/', self.form(throughput='1.5'), follow=True)
+        self.assertContains(response, 'Throughput')
+        self.assertEqual(Gauntlet.objects.count(), 1)
+
+    def test_an_action_does_not_undo_a_finished_test(self):
+
+        # A Worker's last report lands between the reading of the Tests and the
+        # writing of an action. The action must not write back what it read
+
+        self.create()
+        gauntlet = Gauntlet.objects.get()
+        first    = Test.objects.order_by('id').first()
+        stale    = OpenBench.gauntlets.find_summary(gauntlet.id)
+
+        self.assertEqual(self.play(first, [5, 5, 0, 5, 5]), { 'stop' : True })
+
+        with mock.patch('OpenBench.gauntlets.find_summary', return_value=stale):
+            self.client.post('/gauntlet/%d/MODIFY/' % (gauntlet.id), { 'priority' : '5', 'throughput' : '10', 'workload_size' : '2' })
+
+        first.refresh_from_db()
+        self.assertTrue(first.finished)
+        self.assertEqual((first.games, first.priority, first.throughput, first.workload_size), (40, 5, 10, 2))
+
+        with mock.patch('OpenBench.gauntlets.find_summary', return_value=stale):
+            self.client.get('/gauntlet/%d/DELETE/' % (gauntlet.id))
+
+        first.refresh_from_db()
+        self.assertTrue(first.finished and first.deleted)
+        self.assertEqual(first.games, 40)
+
+    def test_an_opponent_deleted_on_its_own_stays_in_sight(self):
+
+        self.create()
+        gauntlet = Gauntlet.objects.get()
+        tests    = { test.base_engine : test for test in Test.objects.all() }
+
+        self.play(tests['Stash-37'], [1, 3, 6, 6, 4])
+        self.play(tests['Sirius'], [2, 4, 8, 4, 2])
+        self.play(tests['Halogen'], [0, 0, 0, 0, 20])   # as if it had crashed in every game
+
+        both = OpenBench.gauntlets.find_summary(gauntlet.id).fit()
+
+        # Deleted from its own page, it leaves the rating and the totals
+        self.client.get('/test/%d/DELETE/' % (tests['Halogen'].id))
+
+        summary = OpenBench.gauntlets.find_summary(gauntlet.id)
+        self.assertEqual(summary.fit()['opponents'], 2)
+        self.assertLess(summary.fit()['rating'], both['rating'] - 100)
+        self.assertEqual(summary.games, 80)
+        self.assertTrue(summary.finished)
+        self.assertFalse(summary.deleted)
+
+        # But not the page, where it is marked, and links to where it is restored
+        response = self.client.get('/gauntlet/%d/' % (gauntlet.id))
+        rows = response.context['rows']
+        self.assertEqual([(row['test'].base_engine, row['removed']) for row in rows],
+            [('Sirius', False), ('Stash-37', False), ('Halogen', True)])
+        self.assertIsNone(rows[2]['implied'])
+        self.assertContains(response, '(deleted)')
+        self.assertContains(response, '/test/%d/' % (tests['Halogen'].id))
+
+        data = self.client.get('/api/gauntlet/%d/' % (gauntlet.id)).json()['gauntlet']
+        self.assertEqual([row['deleted'] for row in data['opponents']], [False, False, True])
+
+        # Stopping or modifying the Gauntlet leaves it alone, and restoring brings it back
+        self.client.post('/gauntlet/%d/MODIFY/' % (gauntlet.id), { 'priority' : '9' })
+        self.assertEqual(Test.objects.get(id=tests['Halogen'].id).priority, 0)
+
+        self.client.get('/gauntlet/%d/RESTORE/' % (gauntlet.id))
+        self.assertFalse(Test.objects.filter(deleted=True).exists())
+        self.assertEqual(OpenBench.gauntlets.find_summary(gauntlet.id).fit()['opponents'], 3)

@@ -26,8 +26,9 @@
             for (const option in defaults)
                 set_option(option, defaults[option]);
 
-            // Opponents play with the same Threads and Hash as the Dev Engine
-            if (defaults['dev_options'])
+            // Opponents play with the same Threads and Hash as the Dev Engine,
+            // unless a Gauntlet is being repeated, which brings its own
+            if (defaults['dev_options'] && !defaults['base_options'])
                 set_option('base_options', defaults['dev_options']);
         }
 

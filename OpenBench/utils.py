@@ -466,7 +466,7 @@ def engine_verify(request, name):
         if (error := OpenBench.gauntlets.verify_ratings(ratings)):
             return error
 
-        try: assert int(request.POST['rated_bench'] or 0) >= 0
+        try: assert int(request.POST.get('rated_bench') or 0) >= 0
         except: return 'The bench of the rated build must be an integer'
 
     return None
@@ -491,8 +491,8 @@ def engine_fields(request):
 
     # (Luminex fork) The rated build is only offered when editing, like the Presets
     if 'ratings' in request.POST:
-        fields['rated_branch'] = request.POST['rated_branch'].strip()
-        fields['rated_bench']  = int(request.POST['rated_bench'] or 0)
+        fields['rated_branch'] = request.POST.get('rated_branch', '').strip()
+        fields['rated_bench']  = int(request.POST.get('rated_bench') or 0)
         fields['ratings']      = json.loads(request.POST['ratings'] or '{}')
 
     return fields
@@ -523,10 +523,14 @@ def engine_edit(request, config):
 
     fields = engine_fields(request)
 
-    # (Luminex fork) The commit that was looked up belongs to the old rated branch
+    # (Luminex fork) The commit that was looked up belongs to the old rated
+    # branch, and so does its bench, unless a new one came with the new branch.
+    # A bench of 0 is read from the commit message when the branch is looked up
     moved = lambda field: field in fields and fields[field] != getattr(config, field)
     if moved('source') or moved('rated_branch'):
         config.rated_sha = ''
+        if not moved('rated_bench'):
+            fields['rated_bench'] = 0
 
     # The name is never changed, since Workloads refer to Engines by name
     for field, value in fields.items():

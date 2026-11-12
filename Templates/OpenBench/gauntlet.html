@@ -33,11 +33,11 @@
             <tr><td class="td-label">Dev Branch</td><td class="branch_name">{{workload.dev.name|prettyName}}</td></tr>
             <tr><td class="td-label">Dev Bench</td><td>{{workload.dev.bench}}</td></tr>
             <tr><td class="td-label">Dev Network</td><td><a href="{{workload|network_download_link:'dev'}}">{{workload.dev_netname}}</a></td></tr>
-            <tr><td class="td-label">Dev Options</td><td class="engine-options">{{workload.dev_options}}</td></tr>
+            <tr><td class="td-label">Dev Options</td><td>{{workload.dev_options}}</td></tr>
             <tr><td class="td-label">Time</td><td>{{workload.dev_time_control}}</td></tr>
 
             <!-- Shared by all of the opponents -->
-            <tr><td class="td-label">Opponent Options</td><td class="engine-options">{{workload.base_options}}</td></tr>
+            <tr><td class="td-label">Opponent Options</td><td>{{workload.base_options}}</td></tr>
             <tr><td class="td-label">Games Each</td><td>{{workload.max_games}}</td></tr>
             <tr><td class="td-label">Rating List</td><td>{{gauntlet.gauntlet.rating_list}}</td></tr>
 
@@ -63,8 +63,10 @@
 
         <div class="anchor-container">
 
-            <!-- Approve Button: For Approvers, while any Test awaits approval -->
-            {% if gauntlet.pending and profile.approver %}
+            <!-- Approve Button: For Admins, or Cross-approvers, while any Test awaits approval -->
+            {% if gauntlet.pending and profile.approver and profile.user.username != gauntlet.author %}
+                <a class="anchorbutton btn-blue" href="/gauntlet/{{gauntlet.id}}/APPROVE">Approve</a>
+            {% elif gauntlet.pending and request.user.is_superuser %}
                 <a class="anchorbutton btn-blue" href="/gauntlet/{{gauntlet.id}}/APPROVE">Approve</a>
             {% else %}
                 <a class="anchorbutton btn-disabled">Approve</a>
@@ -151,8 +153,8 @@
                 <th>Rating List</th>
                 <th>Rating</th>
                 <th>Error</th>
+                <th>From Games</th>
                 <th>Spread</th>
-                <th>Error With Spread</th>
                 <th>Scale</th>
                 <th>Opponents</th>
                 <th>Games</th>
@@ -162,9 +164,9 @@
                     <td><a href="/gauntlet/{{gauntlet.id}}/?list={{each.list|urlencode}}">{{each.list}}</a></td>
                     {% if each.fit %}
                         <td class="numeric">{{each.fit.rating|floatformat:0}}</td>
+                        <td class="numeric">± {{each.fit.error_with_spread|floatformat:0}}</td>
                         <td class="numeric">± {{each.fit.error|floatformat:0}}</td>
                         <td class="numeric">{{each.fit.spread|floatformat:0}}</td>
-                        <td class="numeric">± {{each.fit.error_with_spread|floatformat:0}}</td>
                         <td class="numeric">{{each.fit.scale|floatformat:2}} ± {{each.fit.scale_error|floatformat:2}}</td>
                         <td class="numeric">{{each.fit.opponents}}</td>
                         <td class="numeric">{{each.fit.games}}</td>
@@ -195,11 +197,11 @@
                 <th style="width: 45px">Crash</th>
             </tr>
             {% for row in rows %}
-                <tr {% if not row.test.finished and row.test.approved %}class="active-highlight"{% endif %}>
+                <tr class="{% if row.removed %}gauntlet-removed{% elif not row.test.finished and row.test.approved %}active-highlight{% endif %}">
                     <td class="gauntlet-opponent">
                         <a href="/test/{{row.test.id}}/">{{row.name}}</a>
                         {% if row.test.error %} <span style="color: red; cursor: pointer" title="Crash or illegal move">*</span> {% endif %}
-                        {% if row.test.deleted %} <span title="This Test was deleted">(deleted)</span> {% endif %}
+                        {% if row.removed %} <span title="This Test was deleted, and is not part of the rating. Its page restores it">(deleted)</span> {% endif %}
                     </td>
                     <td class="numeric">{% if row.anchor != None %}{{row.anchor|floatformat:0}}{% else %}-{% endif %}</td>
                     <td class="numeric">{{row.games}} / {{row.test.max_games}}</td>
@@ -230,9 +232,11 @@
             their own time controls, where the gaps between engines are not the ones seen at ours.
             Expected is the score that the rating and the scale predict against an opponent, and Implied
             is the rating that the games against that opponent alone would give. Time and Crash count
-            the games that either side lost on time or by crashing. The error covers the luck of the
-            games. The spread is how far the opponents disagree beyond that, as their own ratings are
-            estimates too.
+            the games that either side lost on time or by crashing, and a red star marks an opponent
+            with a crash or an illegal move: look at its games, and delete its test if they are not
+            real chess, which takes it out of the rating. The spread is how far the opponents disagree
+            beyond the luck of their games, as their own ratings are estimates too. The error includes
+            it; From Games is the part that more games would shrink.
         </p>
     </div>
 

@@ -319,9 +319,15 @@ def devCommitLink(test):
 def lookup(mapping, key):
     return mapping.get(key, '')
 
+def pairs(mapping):
+
+    # A Template reads mapping.items as the key "items" first, if there is one
+    return list(mapping.items())
+
 register.filter('gauntletStatBlock', gauntletStatBlock)
 register.filter('devCommitLink', devCommitLink)
 register.filter('lookup', lookup)
+register.filter('pairs', pairs)
 
 register.filter('book_download_link', book_download_link)
 register.filter('network_download_link', network_download_link)

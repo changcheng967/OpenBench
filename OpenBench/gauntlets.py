@@ -36,7 +36,7 @@ import math
 import re
 
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Q, Subquery, Sum
+from django.db.models import Count, Max, Q, Sum
 
 import OpenBench.model_utils
 import OpenBench.stats
@@ -58,7 +58,7 @@ SCALE_PRIOR = 0.4
 ## The rating
 
 def expected_score(rating, anchor, scale=1.0):
-    return 1.0 / (1.0 + 10.0 ** ((anchor - rating) / (400.0 * scale)))
+    return 1.0 / (1.0 + 10.0 ** max(-300.0, min(300.0, (anchor - rating) / (400.0 * scale))))
 
 def nominal_scales(lists):
 
@@ -83,15 +83,17 @@ def score_stats(test):
     observed = sum(counts)
     total    = sum(n * x for n, x in zip(counts, points))
 
-    # A lone observation says nothing of the spread. Assume the widest one that
-    # independent games allow, so that the error is overstated, not understated
-    if observed < 2:
-        return games_each * observed, total, observed * 0.25 * games_each
+    if not observed:
+        return 0, 0.0, 0.0
 
-    mean     = total / observed
-    variance = sum(n * (x - mean) ** 2 for n, x in zip(counts, points)) / (observed - 1)
+    # The squared deviations give the variance of the total, once one more
+    # observation is counted in at the widest spread that independent games
+    # allow. Among hundreds of observations it is lost. Among a handful it keeps
+    # four identical pairs from passing for a result that is certain
+    mean    = total / observed
+    squares = sum(n * (x - mean) ** 2 for n, x in zip(counts, points))
 
-    return games_each * observed, total, observed * variance
+    return games_each * observed, total, squares + 0.25 * games_each
 
 def fit_rating(samples, nominal=1.0):
 
@@ -113,7 +115,10 @@ def fit_rating(samples, nominal=1.0):
     # at the list's nominal scale, and the fit is then the plain one.
     #
     # The 95% errors come from the measured variance of the points (see
-    # score_stats), not from the likelihood, which knows nothing of draws.
+    # score_stats), not from the likelihood, which knows nothing of draws. Where
+    # the prior holds the scale, its width is in them too: a scale that the
+    # games cannot show is not known, and a rating far from the anchors is
+    # then not known either.
     #
     # They only count the luck of the games. The anchors are estimates too, so
     # opponents may disagree about R by more than their games explain. The
@@ -168,7 +173,7 @@ def fit_rating(samples, nominal=1.0):
         return matrix
 
     def inverse(matrix):
-        det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
+        det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0] or 1e-300
         return [[matrix[1][1] / det, -matrix[0][1] / det], [-matrix[1][0] / det, matrix[0][0] / det]]
 
     def product(a, b):
@@ -225,10 +230,12 @@ def fit_rating(samples, nominal=1.0):
     hessian[1][1] += 1.0 / SCALE_PRIOR ** 2
     solved  = inverse(hessian)
 
-    def covariance(weights):
-        return product(product(solved, curvature(parts, weights)), solved)
+    def covariance(weights, prior=0.0):
+        middle = curvature(parts, weights)
+        middle[1][1] += prior
+        return product(product(solved, middle), solved)
 
-    luck = covariance([sample[3] for sample in samples])
+    luck = covariance([sample[3] for sample in samples], 1.0 / SCALE_PRIOR ** 2)
 
     # The spread. An anchor that is off by x moves the points expected against
     # its opponent by x times what a rating point is worth there. The squared
@@ -242,8 +249,9 @@ def fit_rating(samples, nominal=1.0):
     misses   = sum((sample[2] - sample[1] * part[0]) ** 2 / floor for sample, part, floor in zip(samples, parts, floors))
     leverage = sum(each / floor for each, floor in zip(worth, floors)) * (count - used) / count
 
+    # Fewer than three opponents cannot tell disagreement from the scale
     spread = 0.0
-    if count - used > 0.5 and leverage > 0:
+    if count >= 3 and count - used > 0.5 and leverage > 0:
         spread = math.sqrt(max(0.0, (misses - (count - used)) / leverage))
 
     anchors = covariance([spread ** 2 * each for each in worth])
@@ -264,10 +272,15 @@ def fit_rating(samples, nominal=1.0):
 
 def rated_engines():
 
-    # Engines that have a rating on at least one list. Strongest first, going
-    # by each one's best rating, as the lists are on different scales
+    # Engines that have a rating on at least one list, and a build to play: a
+    # rated branch, or a source that is an archive in itself. Strongest first,
+    # going by each one's best rating, as the lists are on different scales
 
-    configs = [config for config in EngineConfig.objects.filter(enabled=True) if config.ratings]
+    configs = [
+        config for config in EngineConfig.objects.filter(enabled=True)
+        if config.ratings and (config.rated_branch or config.source.endswith('.zip'))
+    ]
+
     return sorted(configs, key=lambda config: (-max(config.ratings.values()), config.name))
 
 def rating_lists(ratings):
@@ -290,7 +303,7 @@ def verify_ratings(ratings):
 
     for name, rating in ratings.items():
 
-        if not re.match(r'^[a-zA-Z0-9 /_.+-]{1,32}$', name):
+        if not re.fullmatch(r'[a-zA-Z0-9 /_.+-]{1,32}', name):
             return 'Rating lists are named with 1-32 of [a-zA-Z0-9 /_.+-]'
 
         if type(rating) not in (int, float) or not 0 < rating < 10000:
@@ -313,7 +326,8 @@ def opponent_build(errors, config):
     name = config.rated_branch
 
     # A source that is itself an archive, such as a set of prebuilt binaries,
-    # is used as it is. There is no branch to look up, and no commit to name
+    # is used as it is. There is no branch to look up, and no commit to name.
+    # A bench of 0 is passed on, and the Client then compares it with nothing
     if config.source.endswith('.zip'):
         stem = config.source.split('/')[-1].removesuffix('.zip')
         return (config.source, name or stem, stem, config.rated_bench)
@@ -391,8 +405,7 @@ def create_gauntlet(request):
 
         # ?like=<id> repeats a Gauntlet for another build: same settings, same
         # opponents. Otherwise every opponent is ticked, on the latest list used
-        like = request.GET.get('like', '')
-        like = find_summary(like) if like.isdigit() else None
+        like = find_summary(request.GET.get('like'))
         last = like.gauntlet if like else Gauntlet.objects.order_by('-id').first()
 
         data = {
@@ -444,6 +457,7 @@ def verify_gauntlet_creation(errors, request):
         (verify.verify_book           , 'book_name', 'Book'),
         (verify.verify_upload_pgns    , 'upload_pgns', 'Upload PGNs'),
         (verify.verify_integer        , 'priority', 'Priority'),
+        (verify.verify_integer        , 'throughput', 'Throughput'),
         (verify.verify_greater_than   , 'throughput', 'Throughput', 0),
         (verify.verify_syzygy_field   , 'syzygy_wdl', 'Syzygy WDL'),
 
@@ -594,11 +608,15 @@ class Summary(object):
         self.info     = gauntlet.info
         self.creation = gauntlet.creation
 
-        # A Gauntlet is deleted by deleting its Tests. Deleted Tests are left
-        # out, unless nothing else is left, so that a restored opponent returns
+        # A Gauntlet is deleted by deleting its Tests. A Test that was deleted
+        # on its own, say for an opponent that kept crashing, is left out of the
+        # rating and of every total, but is still listed, so that it can be found
+        # and restored. Once all are deleted, the Gauntlet is shown as it was
         self.deleted  = all(entry.test.deleted for entry in entries)
         self.entries  = [entry for entry in entries if self.deleted or not entry.test.deleted]
+        self.removed  = [entry for entry in entries if entry not in self.entries]
         self.tests    = [entry.test for entry in self.entries]
+        self.every    = [entry.test for entry in entries]
 
         # The settings are shared, so any Test is able to speak for all of them
         self.first    = self.tests[0] if self.tests else None
@@ -644,16 +662,17 @@ class Summary(object):
 
         # Games lost on time or to a crash, by either side. An opponent that
         # does not cope with our time control is no measure of anything
-        faults = Result.objects.filter(test_id__in=[test.id for test in self.tests]).values('test_id')
+        faults = Result.objects.filter(test_id__in=[test.id for test in self.every]).values('test_id')
         faults = { row['test_id'] : row for row in faults.annotate(timeloss=Sum('timeloss'), crashes=Sum('crashes')) }
 
-        for entry in self.entries:
+        for entry in self.entries + self.removed:
 
             test                = entry.test
             games, points, _    = score_stats(test)
             lower, elo, upper   = OpenBench.stats.Elo(test.results())
             anchor              = entry.ratings.get(rating_list)
-            rated               = games and anchor != None
+            removed             = entry in self.removed
+            rated               = games and anchor != None and not removed
 
             row = {
                 'test'     : test,
@@ -672,19 +691,21 @@ class Summary(object):
                 'expected'      : 100.0 * expected_score(fit['rating'], anchor, scale) if fit and anchor != None else None,
                 'timeloss' : faults.get(test.id, {}).get('timeloss') or 0,
                 'crashes'  : faults.get(test.id, {}).get('crashes') or 0,
+                'removed'  : removed,
             }
 
             rows.append(row)
 
-        return sorted(rows, key=lambda row: (row['anchor'] == None, -(row['anchor'] or 0), row['name']))
+        return sorted(rows, key=lambda row: (row['removed'], row['anchor'] == None, -(row['anchor'] or 0), row['name']))
 
     def stat_lines(self, rating_list=None):
 
         rating_list = rating_list or self.gauntlet.rating_list
         done        = len([test for test in self.tests if test.finished])
 
+        # The one error quoted next to a rating is the one with the spread in it
         if (fit := self.fit(rating_list)):
-            rating_line = 'Rating: %d +- %d (%s)' % (round(fit['rating']), round(fit['error']), rating_list)
+            rating_line = 'Rating: %d +- %d (%s)' % (round(fit['rating']), round(fit['error_with_spread']), rating_list)
         else:
             rating_line = 'Rating: Pending (%s)' % (rating_list)
 
@@ -705,10 +726,11 @@ class Summary(object):
         lines = []
 
         if (fit := self.fit(rating_list)):
-            lines.append('Rating | %d +- %d (95%%) on %s' % (round(fit['rating']), round(fit['error']), rating_list))
+            lines.append('Rating | %d +- %d (95%%) on %s' % (
+                round(fit['rating']), round(fit['error_with_spread']), rating_list))
             if fit['spread'] >= 0.5:
-                lines.append('Spread | %d between opponents, +- %d with it' % (
-                    round(fit['spread']), round(fit['error_with_spread'])))
+                lines.append('Spread | %d between opponents, +- %d from the games alone' % (
+                    round(fit['spread']), round(fit['error'])))
             lines.append('Scale  | %.2f +- %.2f list points per Elo' % (fit['scale'], fit['scale_error']))
         else:
             lines.append('Rating | Pending on %s' % (rating_list))
@@ -780,29 +802,28 @@ def collapse_test_lists(pending, active, completed):
     active     = one_row_each(active, is_pending)
 
     # For the Finished rows the same is done by the database, so that counting
-    # and slicing pages still works. The one Test that is kept is the one
-    # updated last, which places the Gauntlet at the time that it finished.
+    # and slicing pages still works. One grouped query finds the Gauntlets with
+    # nothing left to play, and the Test of each that was created last, which is
+    # the one that is kept. The row sits where that Test was last updated.
 
-    members    = GauntletOpponent.objects.filter(gauntlet=OuterRef('gauntlet_opponent__gauntlet'))
-    unfinished = members.filter(test__finished=False, test__deleted=False)
-    newest     = members.filter(test__deleted=False).order_by('-test__updated', '-test__id')
+    members = GauntletOpponent.objects.filter(test__deleted=False).values('gauntlet_id')
+    members = members.annotate(last=Max('test_id'), unfinished=Count('pk', filter=Q(test__finished=False)))
+    kept    = [member['last'] for member in members if not member['unfinished']]
 
-    completed = completed.annotate(
-        gauntlet_unfinished = Exists(unfinished),
-        gauntlet_newest     = Subquery(newest.values('test__id')[:1]),
-    )
-
-    completed = completed.filter(
-        Q(gauntlet_opponent__isnull=True) |
-        Q(gauntlet_unfinished=False, id=F('gauntlet_newest'))
-    )
+    completed = completed.filter(Q(gauntlet_opponent__isnull=True) | Q(id__in=kept))
 
     return pending, active, completed
 
 ## Viewing
 
 def find_summary(pk):
-    return summarize([int(pk)]).get(int(pk))
+
+    # None for anything that is not the id of a Gauntlet with opponents
+
+    try: pk = int(pk)
+    except (TypeError, ValueError): return None
+
+    return summarize([pk]).get(pk) if 0 < pk < 2 ** 31 else None
 
 def view_gauntlet(request, pk):
 
@@ -868,6 +889,7 @@ def gauntlet_to_dict(summary):
             'ratings'   : row['ratings'],
             'max_games' : row['test'].max_games,
             'finished'  : row['test'].finished,
+            'deleted'   : row['test'].deleted,
             'games'     : row['games'],
             'wins'      : row['test'].wins,
             'losses'    : row['test'].losses,
@@ -940,26 +962,28 @@ def modify_gauntlet(request, pk, action):
         try: test.workload_size = max(1, int(request.POST['workload_size']))
         except: pass
 
+    # The change, the Tests it applies to, and the only fields it may write.
+    # Workers are adding results to these same rows while we are at it, and a
+    # Test read a moment ago must not write back that it is unfinished
     applies = {
-        'APPROVE' : (approve, lambda test: not test.approved),
-        'RESTART' : (restart, lambda test: test in summary.stopped),
-        'STOP'    : (stop   , lambda test: not test.finished),
-        'DELETE'  : (delete , lambda test: not test.deleted),
-        'RESTORE' : (restore, lambda test: test.deleted),
-        'MODIFY'  : (modify , lambda test: True),
+        'APPROVE' : (approve, lambda test: not test.approved      , ['approved']),
+        'RESTART' : (restart, lambda test: test in summary.stopped, ['finished']),
+        'STOP'    : (stop   , lambda test: not test.finished      , ['finished']),
+        'DELETE'  : (delete , lambda test: not test.deleted       , ['deleted']),
+        'RESTORE' : (restore, lambda test: test.deleted           , ['deleted']),
+        'MODIFY'  : (modify , lambda test: True                   , ['priority', 'throughput', 'workload_size']),
     }
 
-    change, applicable = applies[action]
+    change, applicable, fields = applies[action]
+
+    # Restoring reaches the Tests that were deleted on their own as well
+    tests = summary.every if action == 'RESTORE' else summary.tests
 
     with transaction.atomic():
 
-        # Only the fields that an action may touch are written, as the Workers
-        # are adding results to these same rows while we are at it
-        fields = ['approved', 'finished', 'deleted', 'priority', 'throughput', 'workload_size', 'updated']
-
-        for test in filter(applicable, summary.tests):
+        for test in filter(applicable, tests):
             change(test)
-            test.save(update_fields=fields)
+            test.save(update_fields=fields + ['updated'])
             LogEvent.objects.create(author=request.user.username, summary=action, log_file='', test_id=test.id)
 
         if action == 'MODIFY' and 'info' in request.POST:
