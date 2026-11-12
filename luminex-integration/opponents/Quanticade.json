@@ -1,0 +1,29 @@
+{
+    "private": false,
+    "nps": 400000,
+    "source": "https://github.com/Quanticade/Quanticade",
+    "build": {
+        "path": "",
+        "compilers": [
+            "gcc",
+            "gcc-14",
+            "gcc-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "Cronus-3.0",
+        "sha": "5b46162956d40aceee2d9c9f4bf4b9d701db67a6",
+        "bench": 3187919,
+        "ratings": {
+            "CCRL Blitz": 3716,
+            "CCRL 40/15": 3588,
+            "CCI STC": 3332,
+            "CCI LTC": 3645,
+            "CCI VLTC": 3695
+        }
+    }
+}

@@ -1,0 +1,26 @@
+{
+    "private": false,
+    "nps": 680000,
+    "source": "https://github.com/OmerFarukTutkun/Devre",
+    "build": {
+        "path": "src",
+        "compilers": [
+            "g++>=12",
+            "g++-14",
+            "g++-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "v7.0",
+        "sha": "57cf7c678251d394cea1d4a2a8107cd0a67590e9",
+        "bench": 1209674,
+        "ratings": {
+            "CCRL Blitz": 3704,
+            "CCRL 40/15": 3583
+        }
+    }
+}

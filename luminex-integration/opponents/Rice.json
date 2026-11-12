@@ -1,0 +1,26 @@
+{
+    "private": false,
+    "nps": 1220000,
+    "source": "https://github.com/rafid-dev/rice",
+    "build": {
+        "path": "src",
+        "compilers": [
+            "g++>=12",
+            "g++-14",
+            "g++-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "8.0.0",
+        "sha": "6060701ca395b0e798f2ab1302f3efdadd53f61f",
+        "bench": 6151992,
+        "ratings": {
+            "CCRL Blitz": 3530,
+            "CCRL 40/15": 3432
+        }
+    }
+}

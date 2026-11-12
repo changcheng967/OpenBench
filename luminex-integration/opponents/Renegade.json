@@ -1,0 +1,25 @@
+{
+    "private": false,
+    "nps": 620000,
+    "source": "https://github.com/pkrisz99/Renegade",
+    "build": {
+        "path": "Renegade",
+        "compilers": [
+            "g++>=12",
+            "g++-14",
+            "g++-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "v1.3.0",
+        "sha": "b7924536ff12d474efbc8c10effc866cf7db76c0",
+        "bench": 5112160,
+        "ratings": {
+            "CCRL Blitz": 3694
+        }
+    }
+}

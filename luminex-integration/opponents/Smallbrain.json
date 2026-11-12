@@ -1,0 +1,26 @@
+{
+    "private": false,
+    "nps": 1450000,
+    "source": "https://github.com/Disservin/Smallbrain",
+    "build": {
+        "path": "src",
+        "compilers": [
+            "g++>=12",
+            "g++-14",
+            "g++-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "7.0.0",
+        "sha": "f1192fbafd94cf16035548effb3fc9cab6570f17",
+        "bench": 3734449,
+        "ratings": {
+            "CCRL Blitz": 3454,
+            "CCRL 40/15": 3382
+        }
+    }
+}
