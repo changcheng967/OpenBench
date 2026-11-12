@@ -33,7 +33,7 @@
 
         document.addEventListener(
             'DOMContentLoaded', function () {
-                change_gauntlet_engine('{{ profile.engine }}');
+                change_gauntlet_engine('{{ dev_engine }}');
                 enforce_default_text('dev_repo', 'https://github.com/');
             }, false
         );
@@ -94,7 +94,7 @@
                     <label for="rating_list"> Rating List </label>
                     <select id="rating_list" name="rating_list">
                         {% for name in rating_lists %}
-                            <option value="{{ name }}">{{ name }}</option>
+                            <option value="{{ name }}" {% if name == rating_list %}selected{% endif %}>{{ name }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -203,7 +203,8 @@
                     {% for config in opponents %}
                         <tr>
                             <td class="textcenter">
-                                <input type="checkbox" name="opponents" value="{{ config.name }}" checked
+                                <input type="checkbox" name="opponents" value="{{ config.name }}"
+                                    {% if config.name in ticked %}checked{% endif %}
                                     aria-label="Play against {{ config.name }}">
                             </td>
                             <td>{{ config.name }}</td>

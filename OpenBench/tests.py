@@ -299,7 +299,37 @@ class GauntletTests(TestCase):
         offered = [config.name for config in response.context['opponents']]
         self.assertEqual(offered, ['Halogen', 'Sirius', 'Stash-37'])
         self.assertEqual(response.context['rating_lists'], ['CCRL Blitz', 'CCI STC'])
+        self.assertEqual(response.context['ticked'], offered)
+        self.assertEqual(response.context['dev_engine'], 'Luminex')
         self.assertContains(response, 'Play against Halogen')
+
+    def test_form_repeats_a_gauntlet_for_another_build(self):
+
+        self.create(opponents=['Sirius', 'Stash-37'], games='120', rating_list='CCI STC',
+            dev_time_control='60+0.6', base_options='Threads=1 Hash=64', priority='3', workload_size='4')
+
+        gauntlet = Gauntlet.objects.get()
+        context  = self.client.get('/gauntlet/new/?like=%d' % (gauntlet.id)).context
+
+        self.assertEqual(sorted(context['ticked']), ['Sirius', 'Stash-37'])
+        self.assertEqual(context['rating_list'], 'CCI STC')
+
+        defaults = context['defaults']['Luminex']
+        self.assertEqual(defaults['games'], 120)
+        self.assertEqual(defaults['dev_time_control'], '60.0+0.60')
+        self.assertEqual(defaults['base_options'], 'Threads=1 Hash=64')
+        self.assertEqual(defaults['dev_network'], 'A9A8380F')
+        self.assertEqual((defaults['priority'], defaults['workload_size']), (3, 4))
+
+        # Without it, the form starts from the list of the latest Gauntlet, with all ticked
+        context = self.client.get('/gauntlet/new/').context
+        self.assertEqual(context['rating_list'], 'CCI STC')
+        self.assertEqual(context['ticked'], ['Halogen', 'Sirius', 'Stash-37'])
+        self.assertEqual(context['defaults']['Luminex']['dev_time_control'], '60.0+0.60')
+        self.assertNotIn('games', context['defaults']['Luminex'])
+
+        # A Gauntlet that does not exist changes nothing
+        self.assertEqual(self.client.get('/gauntlet/new/?like=999').context['ticked'], ['Halogen', 'Sirius', 'Stash-37'])
 
     def test_creates_one_fixed_games_test_per_opponent(self):
 
@@ -465,6 +495,7 @@ class GauntletTests(TestCase):
         self.assertAlmostEqual(rows['Stash-37']['score'], 100 * 24.5 / 40)
         self.assertAlmostEqual(rows['Stash-37']['implied'], 3417 + OpenBench.stats.logistic_elo(24.5 / 40))
         self.assertEqual(rows['Sirius']['penta'], (2, 4, 8, 4, 2))
+        self.assertEqual((rows['Sirius']['timeloss'], rows['Sirius']['crashes']), (0, 0))
         self.assertAlmostEqual(rows['Sirius']['elo'], 0.0)
         self.assertIsNone(rows['Halogen']['score'])
 

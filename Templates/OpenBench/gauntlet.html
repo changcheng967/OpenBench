@@ -94,6 +94,11 @@
             <a class="mt-1 anchorbutton btn-blue" onclick="copy_text_from_element('long-statblock', true)">Copy Stat Block</a>
         </div>
 
+        <!-- The same settings and opponents, for another build -->
+        <div class="anchor-container">
+            <a class="mt-1 anchorbutton btn-blue" href="/gauntlet/new/?like={{gauntlet.id}}">Repeat For Another Build</a>
+        </div>
+
         <!-- Rating, Spread between opponents if any, Conditions, Games -->
         <pre class="long-statblock" id="long-statblock">{{statblock|linebreaksbr}}</pre>
 
@@ -135,7 +140,7 @@
 
     <!-- The rating on every list that rates an opponent. Selecting a list changes the table below -->
     <div id="ratings" class="w-100 mt-3" style="float:left;">
-        <table class="stripes wrappable summary-table">
+        <table class="stripes wrappable summary-table w-100">
             <tr class="table-header">
                 <th>Rating List</th>
                 <th>Rating</th>
@@ -150,9 +155,9 @@
                     <td><a href="/gauntlet/{{gauntlet.id}}/?list={{each.list|urlencode}}">{{each.list}}</a></td>
                     {% if each.fit %}
                         <td class="numeric">{{each.fit.rating|floatformat:0}}</td>
-                        <td class="numeric">± {{each.fit.error|floatformat:1}}</td>
-                        <td class="numeric">{{each.fit.spread|floatformat:1}}</td>
-                        <td class="numeric">± {{each.fit.error_with_spread|floatformat:1}}</td>
+                        <td class="numeric">± {{each.fit.error|floatformat:0}}</td>
+                        <td class="numeric">{{each.fit.spread|floatformat:0}}</td>
+                        <td class="numeric">± {{each.fit.error_with_spread|floatformat:0}}</td>
                         <td class="numeric">{{each.fit.opponents}}</td>
                         <td class="numeric">{{each.fit.games}}</td>
                     {% else %}
@@ -165,7 +170,7 @@
 
     <!-- One row per opponent, each of which is an ordinary Test -->
     <div id="opponents" class="w-100 mt-3" style="float:left;">
-        <table class="stripes wrappable summary-table">
+        <table class="stripes wrappable summary-table w-100">
             <tr class="table-header">
                 <th>Opponent</th>
                 <th>{{rating_list}}</th>
@@ -178,6 +183,8 @@
                 <th>Elo</th>
                 <th>Implied Rating</th>
                 <th>Expected</th>
+                <th style="width: 45px">Time</th>
+                <th style="width: 45px">Crash</th>
             </tr>
             {% for row in rows %}
                 <tr {% if not row.test.finished and row.test.approved %}class="active-highlight"{% endif %}>
@@ -202,6 +209,8 @@
                         <td class="numeric">-</td>
                     {% endif %}
                     <td class="numeric">{% if row.expected != None %}{{row.expected|floatformat:1}}%{% else %}-{% endif %}</td>
+                    <td class="numeric">{{row.timeloss}}</td>
+                    <td class="numeric">{{row.crashes}}</td>
                 </tr>
             {% endfor %}
         </table>
@@ -210,7 +219,8 @@
             The rating is the one at which the points expected against all of the opponents equal the
             points scored, which is the maximum likelihood rating given each opponent's rating on the list.
             Expected is the score that this rating predicts against an opponent, and Implied Rating is
-            what the games against that opponent alone would say. The error covers the luck of the games.
+            what the games against that opponent alone would say. Time and Crash count the games that
+            either side lost on time or by crashing. The error covers the luck of the games.
             The spread is how far the opponents disagree beyond that, as their own ratings are estimates,
             and were measured at the time control and on the hardware of the list, not at ours.
         </p>

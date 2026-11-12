@@ -36,7 +36,7 @@ import math
 import re
 
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Q, Subquery
+from django.db.models import Exists, F, OuterRef, Q, Subquery, Sum
 
 import OpenBench.model_utils
 import OpenBench.stats
@@ -244,10 +244,11 @@ def opponent_build(errors, config):
 
 ## Creation
 
-def form_defaults(engines):
+def form_defaults(engines, like=None):
 
     # Settings to fill the form with, for each Engine: those of its latest Test.
-    # They are what the Engine is being tested with, whether or not it has presets
+    # They are what the Engine is being tested with, whether or not it has presets.
+    # When repeating a Gauntlet, its Engine takes everything from that Gauntlet
 
     fields = [
         'dev_options', 'dev_time_control', 'book_name', 'upload_pgns',
@@ -264,6 +265,11 @@ def form_defaults(engines):
         if latest:
             defaults[engine.name] = { field : getattr(latest, field) for field in fields }
 
+    if like:
+        test, repeated = like.first, fields + ['dev_network', 'base_options', 'workload_size', 'priority', 'throughput']
+        defaults[test.dev_engine] = { field : getattr(test, field) for field in repeated }
+        defaults[test.dev_engine]['games'] = test.max_games
+
     return defaults
 
 def create_gauntlet(request):
@@ -279,13 +285,22 @@ def create_gauntlet(request):
         engines   = EngineConfig.objects.filter(enabled=True).order_by('name')
         opponents = rated_engines()
 
+        # ?like=<id> repeats a Gauntlet for another build: same settings, same
+        # opponents. Otherwise every opponent is ticked, on the latest list used
+        like = request.GET.get('like', '')
+        like = find_summary(like) if like.isdigit() else None
+        last = like.gauntlet if like else Gauntlet.objects.order_by('-id').first()
+
         data = {
             'networks'     : list(Network.objects.all().values()),
             'books'        : Book.objects.filter(enabled=True).order_by('name'),
             'engines'      : engines,
             'opponents'    : opponents,
+            'ticked'       : [test.base_engine for test in like.tests] if like else [config.name for config in opponents],
             'rating_lists' : rating_lists([config.ratings for config in opponents]),
-            'defaults'     : form_defaults(engines),
+            'rating_list'  : last.rating_list if last else None,
+            'dev_engine'   : like.first.dev_engine if like else Profile.objects.get(user=request.user).engine,
+            'defaults'     : form_defaults(engines, like),
 
             # The source and the networks are applied by create_workload.js
             'engine_configs' : {
@@ -521,6 +536,11 @@ class Summary(object):
         fit         = self.fit(rating_list)
         rows        = []
 
+        # Games lost on time or to a crash, by either side. An opponent that
+        # does not cope with our time control is no measure of anything
+        faults = Result.objects.filter(test_id__in=[test.id for test in self.tests]).values('test_id')
+        faults = { row['test_id'] : row for row in faults.annotate(timeloss=Sum('timeloss'), crashes=Sum('crashes')) }
+
         for entry in self.entries:
 
             test                = entry.test
@@ -536,10 +556,12 @@ class Summary(object):
                 'games'    : test.games,
                 'penta'    : test.as_penta() if test.use_penta else None,
                 'score'    : 100.0 * points / games if games else None,
-                'elo'      : elo   if games else None,
+                'elo'      : elo + 0.0 if games else None,
                 'error'    : max(upper - elo, elo - lower) if games else None,
                 'implied'  : anchor + elo if games and anchor != None else None,
                 'expected' : 100.0 * expected_score(fit['rating'], anchor) if fit and anchor != None else None,
+                'timeloss' : faults.get(test.id, {}).get('timeloss') or 0,
+                'crashes'  : faults.get(test.id, {}).get('crashes') or 0,
             }
 
             rows.append(row)
@@ -552,7 +574,7 @@ class Summary(object):
         done        = len([test for test in self.tests if test.finished])
 
         if (fit := self.fit(rating_list)):
-            rating_line = 'Rating: %d +- %d (%s)' % (round(fit['rating']), math.ceil(fit['error']), rating_list)
+            rating_line = 'Rating: %d +- %d (%s)' % (round(fit['rating']), round(fit['error']), rating_list)
         else:
             rating_line = 'Rating: Pending (%s)' % (rating_list)
 
@@ -573,16 +595,17 @@ class Summary(object):
         lines = []
 
         if (fit := self.fit(rating_list)):
-            lines.append('Rating | %d +- %d (95%%) on %s' % (round(fit['rating']), math.ceil(fit['error']), rating_list))
+            lines.append('Rating | %d +- %d (95%%) on %s' % (round(fit['rating']), round(fit['error']), rating_list))
             if fit['spread'] >= 0.5:
                 lines.append('Spread | %d between opponents, +- %d with it' % (
-                    round(fit['spread']), math.ceil(fit['error_with_spread'])))
+                    round(fit['spread']), round(fit['error_with_spread'])))
         else:
             lines.append('Rating | Pending on %s' % (rating_list))
 
         lines.append('Conf   | %s Threads=%d Hash=%dMB' % (timecontrol, threads, hashmb))
         lines.append('Games  | N: %d W: %d L: %d D: %d' % (self.games, self.wins, self.losses, self.draws))
-        lines.append('Versus | %d opponents, %d games each' % (len(self.tests), test.max_games))
+        lines.append('Versus | %d opponent%s, %d games each' % (
+            len(self.tests), '' if len(self.tests) == 1 else 's', test.max_games))
 
         return lines
 
@@ -744,6 +767,8 @@ def gauntlet_to_dict(summary):
             'error'     : rounded(row['error']),
             'implied'   : rounded(row['implied']),
             'expected'  : rounded(row['expected']),
+            'timeloss'  : row['timeloss'],
+            'crashes'   : row['crashes'],
         } for row in summary.rows()],
     }
 
