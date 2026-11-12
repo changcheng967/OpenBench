@@ -1,0 +1,11 @@
+{% load mytags %}
+<td class="test-author"><a href="/user/{{gauntlet.author}}">{{gauntlet.author|capfirst}}</a></td>
+<td class="test-engine">{{gauntlet.first.dev_engine}}</td>
+<td class="test-name">
+    <a href="/gauntlet/{{gauntlet.id}}/">Gauntlet: {{gauntlet.first.dev.name|prettyName}}</a>
+    {% if gauntlet.error %} <span style="color: red; cursor: pointer" title="Crash or illegal move">*</span> {% endif %}
+</td>
+<td class="test-diff textcenter"><a href="{{gauntlet.first|devCommitLink}}">commit</a></td>
+<td class="test-tc">{{gauntlet.first.dev_time_control}}</td>
+<td class='statblock'><strong>{{gauntlet|gauntletStatBlock|linebreaksbr}}</strong></td>
+<td class="test-info"><div>{{gauntlet.info}}</div></td>

@@ -45,6 +45,7 @@ from OpenBench.stats import TrinomialSPRT, PentanomialSPRT
 
 import OpenBench.views
 import OpenBench.model_utils
+import OpenBench.gauntlets
 
 
 class TimeControl(object):
@@ -456,6 +457,18 @@ def engine_verify(request, name):
     if request.POST['private'] == 'TRUE' and not read_git_credentials(name):
         return 'Private Engines require a Config/credentials.%s file' % (name.replace(' ', '').lower())
 
+    # (Luminex fork) The rated build is only offered when editing, like the Presets
+    if 'ratings' in request.POST:
+
+        try: ratings = json.loads(request.POST['ratings'] or '{}')
+        except: return 'Ratings must be valid json'
+
+        if (error := OpenBench.gauntlets.verify_ratings(ratings)):
+            return error
+
+        try: assert int(request.POST['rated_bench'] or 0) >= 0
+        except: return 'The bench of the rated build must be an integer'
+
     return None
 
 def engine_fields(request):
@@ -464,7 +477,7 @@ def engine_fields(request):
     blank   = { x : { 'default' : {} } for x in PRESET_TYPES }
     presets = json.loads(request.POST['presets']) if 'presets' in request.POST else blank
 
-    return {
+    fields = {
         'private'         : request.POST['private'] == 'TRUE',
         'enabled'         : request.POST['enabled'] == 'TRUE',
         'nps'             : int(request.POST['nps']),
@@ -475,6 +488,14 @@ def engine_fields(request):
         'build_systems'   : request.POST['build_systems'],
         'presets'         : presets,
     }
+
+    # (Luminex fork) The rated build is only offered when editing, like the Presets
+    if 'ratings' in request.POST:
+        fields['rated_branch'] = request.POST['rated_branch'].strip()
+        fields['rated_bench']  = int(request.POST['rated_bench'] or 0)
+        fields['ratings']      = json.loads(request.POST['ratings'] or '{}')
+
+    return fields
 
 def engine_create(request, name):
 
@@ -500,8 +521,15 @@ def engine_edit(request, config):
     if (error := engine_verify(request, config.name)):
         return OpenBench.views.redirect(request, '/manage/engines/%s/' % (config.name), error=error)
 
+    fields = engine_fields(request)
+
+    # (Luminex fork) The commit that was looked up belongs to the old rated branch
+    moved = lambda field: field in fields and fields[field] != getattr(config, field)
+    if moved('source') or moved('rated_branch'):
+        config.rated_sha = ''
+
     # The name is never changed, since Workloads refer to Engines by name
-    for field, value in engine_fields(request).items():
+    for field, value in fields.items():
         setattr(config, field, value)
     config.save()
 

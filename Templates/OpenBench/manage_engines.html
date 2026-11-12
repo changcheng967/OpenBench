@@ -37,6 +37,8 @@
         <tr class="table-header">
             <th>Name</th>
             <th>Source</th>
+            <th>Rated Build</th>
+            <th>Ratings</th>
             <th></th>
             <th></th>
             <th></th>
@@ -46,6 +48,8 @@
             <tr>
                 <td>{{config.name}}</td>
                 <td><a href="{{config.source}}">{{config.source|removePrefix:"https://github.com/"}}</a></td>
+                <td>{{config.rated_branch}}</td>
+                <td>{% for name, rating in config.ratings.items %}{{name}} {{rating}}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
 
                 <td style="text-align: center">
                     {% if config.enabled %}

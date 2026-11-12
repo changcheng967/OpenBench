@@ -25,6 +25,15 @@
 #
 # The EngineConfig takes its name from the file name, sans the .json suffix.
 # Existing Engines are updated in place, leaving their enabled flag alone.
+#
+# (Luminex fork) A file may also describe the build that the Engine's published
+# ratings belong to, which makes the Engine an opponent for Gauntlets:
+#
+#   "rated" : { "branch" : "v37.0", "sha" : "<commit>", "bench" : 123456,
+#               "ratings" : { "CCRL Blitz" : 3417 } }
+#
+# Only the ratings are required. Without a sha, the branch is looked up on
+# Github when the Engine is first played against.
 
 import json
 import os
@@ -32,6 +41,7 @@ import os
 from django.core.management.base import BaseCommand, CommandError
 
 from OpenBench.config import PRESET_TYPES, verify_engine_presets
+from OpenBench.gauntlets import verify_ratings
 from OpenBench.models import EngineConfig
 
 class Command(BaseCommand):
@@ -78,6 +88,13 @@ def engine_fields(fname, name, conf):
         raise CommandError('%s %s' % (fname, error))
 
     build = conf['build']
+    rated = conf.get('rated', {})
+
+    if type(rated) != dict:
+        raise CommandError('%s "rated" must be a json object' % (fname))
+
+    if (error := verify_ratings(rated.get('ratings', {}))):
+        raise CommandError('%s %s' % (fname, error))
 
     return {
         'private'         : conf['private'],
@@ -88,6 +105,10 @@ def engine_fields(fname, name, conf):
         'build_cpuflags'  : ' '.join(build.get('cpuflags', [])),
         'build_systems'   : ' '.join(build.get('systems', [])),
         'presets'         : presets,
+        'rated_branch'    : rated.get('branch', ''),
+        'rated_sha'       : rated.get('sha', ''),
+        'rated_bench'     : rated.get('bench', 0),
+        'ratings'         : rated.get('ratings', {}),
     }
 
 def expand_path(path):

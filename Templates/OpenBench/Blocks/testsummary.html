@@ -1,4 +1,7 @@
 {% load mytags %}
+{% if test.gauntlet_summary %}
+{% include "OpenBench/Blocks/gauntletsummary.html" with gauntlet=test.gauntlet_summary %}
+{% else %}
 <td class="test-author"><a href="/user/{{test.author}}">{{test.author|capfirst}}</a></td>
 <td class="test-engine">{{test.dev_engine}}</td>
 <td class="test-name">
@@ -14,3 +17,4 @@
 </td>
 <td class='statblock statblock-{{test|testResultColour}}'><strong>{{test|shortStatBlock|linebreaksbr}}</strong></td>
 <td class="test-info"><div>{{test.info}}</div></td>
+{% endif %}

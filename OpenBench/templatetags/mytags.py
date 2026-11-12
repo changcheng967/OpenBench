@@ -304,6 +304,25 @@ def test_is_time_odds(test):
 def test_is_fischer(test):
     return 'FRC' in test.book_name.upper() or '960' in test.book_name.upper()
 
+# (Luminex fork) Filters for Gauntlets
+
+def gauntletStatBlock(summary):
+    return '\n'.join(summary.stat_lines())
+
+def devCommitLink(test):
+
+    # Same derivation of the repo as gitDiffLink, from either kind of archive link
+    repo = OpenBench.utils.path_join(*test.dev.source.split('/')[:-2])
+    repo = repo.replace('://api.github.com', '://github.com').replace('/repos/', '/')
+    return OpenBench.utils.path_join(repo, 'commit', test.dev.sha)
+
+def lookup(mapping, key):
+    return mapping.get(key, '')
+
+register.filter('gauntletStatBlock', gauntletStatBlock)
+register.filter('devCommitLink', devCommitLink)
+register.filter('lookup', lookup)
+
 register.filter('book_download_link', book_download_link)
 register.filter('network_download_link', network_download_link)
 

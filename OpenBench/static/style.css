@@ -634,3 +634,21 @@ td pre {
     border: 1px solid #ccc;
     border-radius: 8px;
 }
+
+/* (Luminex fork) Gauntlets */
+
+#content .gauntlet-note {
+    color: var(--color-font2);
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: 64em;
+    white-space: normal;
+}
+
+#content .gauntlet-opponents td {
+    font-size: 14px;
+}
+
+#content .gauntlet-opponents input[type="checkbox"] {
+    cursor: pointer;
+}

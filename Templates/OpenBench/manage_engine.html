@@ -70,6 +70,28 @@
                     <input id="build_systems" name="build_systems" value="{{engine_config.build_systems}}" {% if not can_manage %}readonly{% endif %}>
                 </div>
 
+                <h3> Rated Build </h3>
+
+                <div class="row">
+                    <label for="rated_branch"> Branch </label>
+                    <input id="rated_branch" name="rated_branch" value="{{engine_config.rated_branch}}" placeholder="Tag, branch or commit that the ratings belong to" {% if not can_manage %}readonly{% endif %}>
+                </div>
+
+                <div class="row">
+                    <label for="rated_sha"> Commit </label>
+                    <input id="rated_sha" readonly value="{{engine_config.rated_sha}}" placeholder="Looked up when first played against">
+                </div>
+
+                <div class="row">
+                    <label for="rated_bench"> Bench </label>
+                    <input id="rated_bench" name="rated_bench" value="{{engine_config.rated_bench}}" {% if not can_manage %}readonly{% endif %}>
+                </div>
+
+                <div class="row">
+                    <label for="ratings"> Ratings </label>
+                    <input id="ratings" name="ratings" value="{{ratings}}" placeholder="{ &quot;CCRL Blitz&quot; : 3417 }" {% if not can_manage %}readonly{% endif %}>
+                </div>
+
                 <h3> Presets </h3>
 
                 <div class="row">
