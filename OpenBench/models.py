@@ -372,6 +372,10 @@ class Gauntlet(Model):
     rating_list = CharField(max_length=32) # List that the headline rating is on
     creation    = DateTimeField(auto_now_add=True)
 
+    # { list : points of that list per Elo point }, for the lists where that is
+    # not 1, as the Server's config had them when this was created
+    scales      = JSONField(default=dict, blank=True)
+
     def __str__(self):
         return 'Gauntlet %d' % (self.id)
 

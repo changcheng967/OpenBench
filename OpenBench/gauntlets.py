@@ -49,10 +49,23 @@ from OpenBench.workloads import verify_workload as verify
 
 ELO_PER_LOGIT = 400.0 / math.log(10.0)
 
+# How firmly the scale of a list is held at its nominal value, as the standard
+# deviation of the scale's logarithm. Weak: a dozen opponents outweigh it a
+# hundredfold. It only decides the matter when the games cannot.
+SCALE_PRIOR = 0.4
+
 ## The rating
 
-def expected_score(rating, anchor):
-    return 1.0 / (1.0 + 10.0 ** ((anchor - rating) / 400.0))
+def expected_score(rating, anchor, scale=1.0):
+    return 1.0 / (1.0 + 10.0 ** ((anchor - rating) / (400.0 * scale)))
+
+def nominal_scales(lists):
+
+    # Lists whose points are not Elo points say so in the Server's config, as
+    # "rating_list_scales". CCI, for one, multiplies its ratings by 1.35
+
+    configured = OPENBENCH_CONFIG.get('rating_list_scales', {})
+    return { name : float(configured[name]) for name in lists if name in configured }
 
 def score_stats(test):
 
@@ -79,27 +92,33 @@ def score_stats(test):
 
     return games_each * observed, total, observed * variance
 
-def fit_rating(samples):
+def fit_rating(samples, nominal=1.0):
 
-    # The maximum likelihood rating given [(anchor, games, points, variance), ...]:
+    # The rating that explains the games, given [(anchor, games, points, variance), ...]:
     # one tuple per opponent, with the opponent's published rating as the anchor.
     #
-    # Each game is taken to score, on average, E = 1 / (1 + 10^((anchor - R) / 400)).
-    # Counting a draw as half a win and half a loss, the log-likelihood of R is
+    # A game against an opponent is taken to score, on average,
+    #     E = 1 / (1 + 10^((anchor - R) / (400 * scale)))
+    # and a draw counts as half a win and half a loss, so the log-likelihood is
     #     sum of  points * ln(E) + (games - points) * ln(1 - E)
-    # and it peaks where the points expected of R equal the points scored:
-    #     sum of  games * E(R)  =  sum of  points
-    # The left side rises with R, so bisection finds the one solution.
     #
-    # The error follows from that same equation. The points scored vary by the
-    # measured variances, and a rating point is worth sum(games * E * (1 - E))
-    # / ELO_PER_LOGIT points, so the 95% error of R is 1.96 * sqrt(variance) / worth.
+    # Two things are fitted. R is the rating: it sits where the points expected
+    # against all of the opponents equal the points scored. The scale is how
+    # many points of the list one Elo point of ours is worth. It is not 1: a
+    # list is measured at its own time control, where the gaps between engines
+    # are narrower or wider than at ours, and some lists stretch their ratings.
+    # The games show the scale as the slope of our scores against the anchors.
+    # With too few or too similar opponents to show it, a weak prior holds it
+    # at the list's nominal scale, and the fit is then the plain one.
     #
-    # That error only counts the luck of the games. The anchors are themselves
-    # estimates, and are measured under other conditions than ours, so opponents
-    # may disagree about R by more than their games explain. The spread is that
-    # extra disagreement: the standard deviation, between opponents, of the
-    # rating each one implies (DerSimonian-Laird). error_with_spread adds it.
+    # The 95% errors come from the measured variance of the points (see
+    # score_stats), not from the likelihood, which knows nothing of draws.
+    #
+    # They only count the luck of the games. The anchors are estimates too, so
+    # opponents may disagree about R by more than their games explain. The
+    # spread is that extra disagreement: how far off, as a standard deviation
+    # in rating points, each anchor has to be to account for the points that
+    # the fit does not. error_with_spread adds its effect on R.
 
     samples = [sample for sample in samples if sample[1] > 0]
     games   = sum(sample[1] for sample in samples)
@@ -109,50 +128,134 @@ def fit_rating(samples):
     if not samples or points <= 0 or points >= games:
         return None
 
-    def surplus(rating):
-        return sum(n * expected_score(rating, anchor) for anchor, n, _, _ in samples) - points
+    centre = -math.log(nominal)
 
-    low  = min(sample[0] for sample in samples) - 4000.0
-    high = max(sample[0] for sample in samples) + 4000.0
+    def terms(rating, log_slope):
+
+        # Per opponent: the expected share of the points, the variance that a
+        # game of only wins and losses would have, and how the exponent moves
+        # with the rating and with the log of the slope
+
+        slope, parts = math.exp(log_slope) / ELO_PER_LOGIT, []
+
+        for anchor, n, _, _ in samples:
+            exponent = max(-700.0, min(700.0, slope * (rating - anchor)))
+            share    = min(max(1.0 / (1.0 + math.exp(-exponent)), 1e-12), 1.0 - 1e-12)
+            parts.append((share, n * share * (1.0 - share), slope, exponent))
+
+        return parts
+
+    def likelihood(rating, log_slope):
+
+        total = -(log_slope - centre) ** 2 / (2.0 * SCALE_PRIOR ** 2)
+        for (share, _, _, _), (_, n, scored, _) in zip(terms(rating, log_slope), samples):
+            total += scored * math.log(share) + (n - scored) * math.log(1.0 - share)
+
+        return total
+
+    def curvature(parts, weights):
+
+        # Sum of weight * J J', where J is how an exponent moves with (rating, log slope)
+
+        matrix = [[0.0, 0.0], [0.0, 0.0]]
+        for (_, _, by_rating, by_slope), weight in zip(parts, weights):
+            matrix[0][0] += weight * by_rating * by_rating
+            matrix[0][1] += weight * by_rating * by_slope
+            matrix[1][1] += weight * by_slope * by_slope
+        matrix[1][0] = matrix[0][1]
+
+        return matrix
+
+    def inverse(matrix):
+        det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
+        return [[matrix[1][1] / det, -matrix[0][1] / det], [-matrix[1][0] / det, matrix[0][0] / det]]
+
+    def product(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(2)) for j in range(2)] for i in range(2)]
+
+    # Start from the rating that the nominal scale gives. The points expected
+    # rise with the rating, so bisection finds it
+
+    low  = min(sample[0] for sample in samples) - 4000.0 * nominal
+    high = max(sample[0] for sample in samples) + 4000.0 * nominal
 
     for _ in range(64):
         rating = (low + high) / 2.0
-        if surplus(rating) < 0: low = rating
+        if sum(n * expected_score(rating, anchor, nominal) for anchor, n, _, _ in samples) < points: low = rating
         else: high = rating
 
-    # How many points one rating point is worth, against each opponent
-    worth = [
-        n * expected_score(rating, anchor) * (1.0 - expected_score(rating, anchor)) / ELO_PER_LOGIT
-        for anchor, n, _, _ in samples
-    ]
+    # Newton's method on both, halving any step that would lower the likelihood
 
-    deviation = math.sqrt(sum(sample[3] for sample in samples)) / sum(worth)
+    log_slope = centre
+    reached   = likelihood(rating, log_slope)
 
-    # The rating that each opponent implies on its own, and its deviation
-    implied = []
-    for anchor, n, scored, variance in samples:
-        if 0 < scored < n and variance > 0:
-            mean  = scored / n
-            slope = mean * (1.0 - mean) / ELO_PER_LOGIT
-            implied.append((anchor + OpenBench.stats.logistic_elo(mean), math.sqrt(variance) / n / slope))
+    for _ in range(200):
+
+        parts    = terms(rating, log_slope)
+        gradient = [0.0, -(log_slope - centre) / SCALE_PRIOR ** 2]
+
+        for (share, _, by_rating, by_slope), (_, n, scored, _) in zip(parts, samples):
+            gradient[0] += (scored - n * share) * by_rating
+            gradient[1] += (scored - n * share) * by_slope
+
+        hessian = curvature(parts, [part[1] for part in parts])
+        hessian[1][1] += 1.0 / SCALE_PRIOR ** 2
+
+        step = inverse(hessian)
+        step = [step[0][0] * gradient[0] + step[0][1] * gradient[1], step[1][0] * gradient[0] + step[1][1] * gradient[1]]
+
+        factor = 1.0
+        while factor > 1e-9 and likelihood(rating + factor * step[0], log_slope + factor * step[1]) < reached:
+            factor /= 2.0
+
+        if factor <= 1e-9:
+            break
+
+        rating, log_slope = rating + factor * step[0], log_slope + factor * step[1]
+        reached = likelihood(rating, log_slope)
+
+        if abs(factor * step[0]) + abs(factor * step[1]) < 1e-9:
+            break
+
+    parts   = terms(rating, log_slope)
+    binary  = [part[1] for part in parts]
+    data    = curvature(parts, binary)
+    hessian = [row[:] for row in data]
+    hessian[1][1] += 1.0 / SCALE_PRIOR ** 2
+    solved  = inverse(hessian)
+
+    def covariance(weights):
+        return product(product(solved, curvature(parts, weights)), solved)
+
+    luck = covariance([sample[3] for sample in samples])
+
+    # The spread. An anchor that is off by x moves the points expected against
+    # its opponent by x times what a rating point is worth there. The squared
+    # misses of the fit, beyond what the luck of the games and the fitting of
+    # the parameters explain, are put down to that.
+
+    count    = len(samples)
+    used     = sum(data[i][j] * solved[j][i] for i in range(2) for j in range(2))
+    floors   = [max(sample[3], 0.1 * each) for sample, each in zip(samples, binary)]
+    worth    = [(each * part[2]) ** 2 for each, part in zip(binary, parts)]
+    misses   = sum((sample[2] - sample[1] * part[0]) ** 2 / floor for sample, part, floor in zip(samples, parts, floors))
+    leverage = sum(each / floor for each, floor in zip(worth, floors)) * (count - used) / count
 
     spread = 0.0
-    if len(implied) >= 3:
-        weights  = [1.0 / dev ** 2 for _, dev in implied]
-        centre   = sum(w * r for w, (r, _) in zip(weights, implied)) / sum(weights)
-        excess   = sum(w * (r - centre) ** 2 for w, (r, _) in zip(weights, implied)) - (len(implied) - 1)
-        scale    = sum(weights) - sum(w ** 2 for w in weights) / sum(weights)
-        spread   = math.sqrt(max(0.0, excess / scale)) if scale > 0 else 0.0
+    if count - used > 0.5 and leverage > 0:
+        spread = math.sqrt(max(0.0, (misses - (count - used)) / leverage))
 
-    # An anchor that is off by x moves the rating by x times its share of the worth
-    shares = sum((w / sum(worth)) ** 2 for w in worth)
+    anchors = covariance([spread ** 2 * each for each in worth])
+    scale   = math.exp(-log_slope)
 
     return {
         'rating'            : rating,
-        'error'             : 1.96 * deviation,
+        'error'             : 1.96 * math.sqrt(max(0.0, luck[0][0])),
         'spread'            : spread,
-        'error_with_spread' : 1.96 * math.sqrt(deviation ** 2 + spread ** 2 * shares),
-        'opponents'         : len(samples),
+        'error_with_spread' : 1.96 * math.sqrt(max(0.0, luck[0][0] + anchors[0][0])),
+        'scale'             : scale,
+        'scale_error'       : 1.96 * scale * math.sqrt(max(0.0, luck[1][1] + anchors[1][1])),
+        'opponents'         : count,
         'games'             : games,
     }
 
@@ -409,6 +512,7 @@ def create_new_gauntlet(request):
             author      = request.user.username,
             info        = verify.determine_info(request, dev_info[4])[:1024],
             rating_list = request.POST['rating_list'],
+            scales      = nominal_scales(rating_lists([config.ratings for config in opponents])),
         )
 
         # One Engine for the Dev build, shared by all of the Tests
@@ -522,7 +626,7 @@ class Summary(object):
         return fit_rating([
             (entry.ratings[rating_list], *score_stats(entry.test))
             for entry in self.entries if rating_list in entry.ratings
-        ])
+        ], self.gauntlet.scales.get(rating_list, 1.0))
 
     def fits(self):
         return [{ 'list' : name, 'fit' : self.fit(name) } for name in self.lists()]
@@ -534,6 +638,7 @@ class Summary(object):
 
         rating_list = rating_list or self.gauntlet.rating_list
         fit         = self.fit(rating_list)
+        scale       = fit['scale'] if fit else self.gauntlet.scales.get(rating_list, 1.0)
         rows        = []
 
         # Games lost on time or to a crash, by either side. An opponent that
@@ -547,6 +652,7 @@ class Summary(object):
             games, points, _    = score_stats(test)
             lower, elo, upper   = OpenBench.stats.Elo(test.results())
             anchor              = entry.ratings.get(rating_list)
+            rated               = games and anchor != None
 
             row = {
                 'test'     : test,
@@ -558,8 +664,11 @@ class Summary(object):
                 'score'    : 100.0 * points / games if games else None,
                 'elo'      : elo + 0.0 if games else None,
                 'error'    : max(upper - elo, elo - lower) if games else None,
-                'implied'  : anchor + elo if games and anchor != None else None,
-                'expected' : 100.0 * expected_score(fit['rating'], anchor) if fit and anchor != None else None,
+
+                # An Elo difference of ours is `scale` times as many points on the list
+                'implied'       : anchor + scale * elo if rated else None,
+                'implied_error' : scale * max(upper - elo, elo - lower) if rated else None,
+                'expected'      : 100.0 * expected_score(fit['rating'], anchor, scale) if fit and anchor != None else None,
                 'timeloss' : faults.get(test.id, {}).get('timeloss') or 0,
                 'crashes'  : faults.get(test.id, {}).get('crashes') or 0,
             }
@@ -599,6 +708,7 @@ class Summary(object):
             if fit['spread'] >= 0.5:
                 lines.append('Spread | %d between opponents, +- %d with it' % (
                     round(fit['spread']), round(fit['error_with_spread'])))
+            lines.append('Scale  | %.2f +- %.2f list points per Elo' % (fit['scale'], fit['scale_error']))
         else:
             lines.append('Rating | Pending on %s' % (rating_list))
 
@@ -766,6 +876,7 @@ def gauntlet_to_dict(summary):
             'elo'       : rounded(row['elo']),
             'error'     : rounded(row['error']),
             'implied'   : rounded(row['implied']),
+            'implied_error' : rounded(row['implied_error']),
             'expected'  : rounded(row['expected']),
             'timeloss'  : row['timeloss'],
             'crashes'   : row['crashes'],

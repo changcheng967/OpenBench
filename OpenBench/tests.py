@@ -100,6 +100,7 @@ class RatingFitTests(TestCase):
 
         fit = fit_rating(samples)
         self.assertAlmostEqual(fit['rating'], truth, places=3)
+        self.assertAlmostEqual(fit['scale'], 1.0, places=6)
         self.assertEqual(fit['opponents'], 5)
         self.assertEqual(fit['games'], 5000)
 
@@ -107,10 +108,45 @@ class RatingFitTests(TestCase):
         self.assertAlmostEqual(fit['spread'], 0.0, places=6)
         self.assertAlmostEqual(fit['error'], fit['error_with_spread'], places=6)
 
+    def test_finds_the_scale_of_a_stretched_list(self):
+
+        # A list that spreads its engines 1.4 times as far apart as our games
+        # do. Taken as Elo points, the anchors would put us 72 points too high
+
+        truth   = 3100.0
+        anchors = (3170, 3332, 3453, 3465, 3492)
+        samples = [(anchor, 1000, 1000 * expected_score(truth, anchor, 1.4), 150.0) for anchor in anchors]
+
+        fit = fit_rating(samples)
+        self.assertAlmostEqual(fit['rating'], truth, delta=4.0)
+        self.assertAlmostEqual(fit['scale'], 1.4, delta=0.03)
+        self.assertLess(fit['spread'], 1.0)
+
+        # The weak pull towards the nominal scale is all that keeps it from
+        # being exact. Told the nominal scale of the list, it is
+        fit = fit_rating(samples, nominal=1.4)
+        self.assertAlmostEqual(fit['rating'], truth, places=3)
+        self.assertAlmostEqual(fit['scale'], 1.4, places=6)
+
+        # The scale is known less well than the rating, and says so
+        self.assertGreater(fit['scale_error'], 0.05)
+        self.assertLess(fit['scale_error'], 0.30)
+
     def test_one_opponent_matches_the_plain_elo_difference(self):
 
         fit = fit_rating([(3000, 400, 240.0, 60.0)])
         self.assertAlmostEqual(fit['rating'], 3000 + OpenBench.stats.logistic_elo(0.6), places=3)
+        self.assertAlmostEqual(fit['scale'], 1.0, places=6)
+
+        # One opponent cannot show the scale, so the nominal one is used as it is
+        fit = fit_rating([(3000, 400, 240.0, 60.0)], nominal=1.35)
+        self.assertAlmostEqual(fit['rating'], 3000 + 1.35 * OpenBench.stats.logistic_elo(0.6), places=3)
+        self.assertAlmostEqual(fit['scale'], 1.35, places=6)
+
+        # Nor can opponents that share one rating
+        fit = fit_rating([(3000, 400, 240.0, 60.0), (3000, 200, 100.0, 30.0)])
+        self.assertAlmostEqual(fit['rating'], 3000 + OpenBench.stats.logistic_elo(340.0 / 600.0), places=3)
+        self.assertAlmostEqual(fit['scale'], 1.0, places=6)
 
     def test_needs_points_scored_and_points_dropped(self):
 
@@ -149,6 +185,39 @@ class RatingFitTests(TestCase):
 
         self.assertGreater(covered / runs, 0.91)
         self.assertLess(covered / runs, 0.985)
+
+    def test_error_holds_when_the_scale_has_to_be_found(self):
+
+        # As above, but the list is 1.3 times as wide as our games make it, and
+        # the build is weaker than every opponent, so that its rating hangs on
+        # the scale. The error has to widen by itself, and still hold
+
+        rng     = random.Random(20261113)
+        truth   = 3350.0
+        anchors = [3417, 3489, 3530, 3600, 3720]
+        covered = 0
+        errors  = []
+        runs    = 400
+
+        for _ in range(runs):
+
+            samples = []
+            for anchor in anchors:
+                test = Test(use_penta=True, use_tri=False)
+                test.LL, test.LD, test.DD, test.DW, test.WW = simulate_pairs(
+                    rng, expected_score(truth, anchor, 1.3), 150)
+                samples.append((anchor, *OpenBench.gauntlets.score_stats(test)))
+
+            fit = fit_rating(samples)
+            covered += abs(fit['rating'] - truth) <= fit['error']
+            errors.append(fit['error'])
+
+        self.assertGreater(covered / runs, 0.90)
+        self.assertLess(covered / runs, 0.985)
+
+        # With the scale held at 1 the rating would be 41 points too high,
+        # with an error of 17 that does not know it
+        self.assertGreater(sum(errors) / runs, 20.0)
 
     def test_spread_reports_anchors_that_disagree(self):
 
@@ -493,18 +562,25 @@ class GauntletTests(TestCase):
         self.assertEqual(rows['Stash-37']['anchor'], 3417)
         self.assertEqual(rows['Stash-37']['games'], 40)
         self.assertAlmostEqual(rows['Stash-37']['score'], 100 * 24.5 / 40)
-        self.assertAlmostEqual(rows['Stash-37']['implied'], 3417 + OpenBench.stats.logistic_elo(24.5 / 40))
+        self.assertEqual(rows['Stash-37']['implied'], 3417 + response.context['fits'][0]['fit']['scale'] * rows['Stash-37']['elo'])
+        self.assertAlmostEqual(rows['Stash-37']['elo'], OpenBench.stats.logistic_elo(24.5 / 40))
         self.assertEqual(rows['Sirius']['penta'], (2, 4, 8, 4, 2))
         self.assertEqual((rows['Sirius']['timeloss'], rows['Sirius']['crashes']), (0, 0))
         self.assertAlmostEqual(rows['Sirius']['elo'], 0.0)
         self.assertIsNone(rows['Halogen']['score'])
 
         # 44.5 points of 80 were scored, and the rating expects exactly as many
-        fit = gauntlet_fit = OpenBench.gauntlets.find_summary(gauntlet.id).fit()
-        expected = 40 * expected_score(fit['rating'], 3417) + 40 * expected_score(fit['rating'], 3530)
+        fit = OpenBench.gauntlets.find_summary(gauntlet.id).fit()
+        expected  = 40 * expected_score(fit['rating'], 3417, fit['scale'])
+        expected += 40 * expected_score(fit['rating'], 3530, fit['scale'])
         self.assertAlmostEqual(expected, 44.5, places=6)
         self.assertEqual(fit['opponents'], 2)
-        self.assertAlmostEqual(rows['Sirius']['expected'], 100 * expected_score(fit['rating'], 3530))
+        self.assertAlmostEqual(rows['Sirius']['expected'], 100 * expected_score(fit['rating'], 3530, fit['scale']))
+
+        # We did better against the weaker one by less than 113 Elo points
+        # would have it, so the list's points count for less than Elo points
+        self.assertGreater(fit['scale'], 1.0)
+        self.assertContains(response, 'Scale  | %.2f +- ' % (fit['scale']))
 
         self.assertContains(response, 'Rating | %d +- ' % (round(fit['rating'])))
         self.assertContains(response, 'on CCRL Blitz')
@@ -514,7 +590,12 @@ class GauntletTests(TestCase):
         # The other list rates only Stash and Halogen, and only Stash has games
         fits = { each['list'] : each['fit'] for each in response.context['fits'] }
         self.assertEqual(list(fits), ['CCRL Blitz', 'CCI STC'])
-        self.assertAlmostEqual(fits['CCI STC']['rating'], 3050 + OpenBench.stats.logistic_elo(24.5 / 40), places=3)
+
+        # CCI's points are 1.35 to the Elo point, as the Server's config says,
+        # and one opponent with games leaves that as it is
+        self.assertEqual(gauntlet.scales, { 'CCI STC' : 1.35 })
+        self.assertAlmostEqual(fits['CCI STC']['scale'], 1.35, places=6)
+        self.assertAlmostEqual(fits['CCI STC']['rating'], 3050 + 1.35 * OpenBench.stats.logistic_elo(24.5 / 40), places=3)
 
         response = self.client.get('/gauntlet/%d/?list=CCI STC' % (gauntlet.id))
         self.assertEqual(response.context['rating_list'], 'CCI STC')

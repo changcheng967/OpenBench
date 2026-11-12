@@ -95,6 +95,12 @@ def verify_general_config(conf):
     assert type(conf.get('x_accel_redirect_root')) == str
     assert conf['x_accel_redirect_root'].startswith('/')
 
+    # (Luminex fork) Optional. Rating lists whose points are not Elo points,
+    # as { list : points per Elo point }. See OpenBench/gauntlets.py
+
+    for name, scale in conf.get('rating_list_scales', {}).items():
+        assert type(name) == str and type(scale) in (int, float) and scale > 0
+
 def verify_engine_test_preset(test_preset):
 
     valid_keys = [

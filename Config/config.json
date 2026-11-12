@@ -13,5 +13,7 @@
     "balance_engine_throughputs"  : false,
 
     "use_x_accel_redirect"  : false,
-    "x_accel_redirect_root" : "/x-accel-media/"
+    "x_accel_redirect_root" : "/x-accel-media/",
+
+    "rating_list_scales" : { "CCI STC" : 1.35, "CCI LTC" : 1.35, "CCI VLTC" : 1.35 }
 }
