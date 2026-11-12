@@ -28,6 +28,10 @@ Three things differ from a hand-made set of tests:
   apply to every test of the gauntlet. Each test still has its own page, with
   its PGNs, its errors and its results per machine.
 
+Workers are shared out between tests, and each opponent is a test. Next to an
+SPRT of the same priority, a gauntlet of twelve opponents therefore gets
+about twelve workers in thirteen. Give it a priority of its own.
+
 ## Creating one
 
 On the site: Create Gauntlet in the sidebar (`/gauntlet/new/`). The form
@@ -43,7 +47,7 @@ From a script, the same fields go to `/scripts/` with `action=CREATE_GAUNTLET`,
     dev_engine=Luminex  dev_repo=https://github.com/changcheng967/Luminex
     dev_branch=<commit> dev_bench=206603  dev_network=<sha of the network>
     dev_options="Threads=1 Hash=16"  dev_time_control=10+0.1
-    opponents=Stash  opponents=Midnight  ...
+    opponents=Stash  opponents=Smallbrain  ...
     base_options="Threads=1 Hash=16"  games=400  rating_list="CCRL Blitz"
     book_name=2moves_v1.epd  upload_pgns=COMPACT  priority=0  throughput=1000
     workload_size=8  syzygy_wdl=OPTIONAL  syzygy_adj=DISABLED
@@ -86,30 +90,37 @@ An opponent has to be buildable by the client as it is:
   on every run, within 60 seconds while every core runs a copy.
 
 A source that is itself a `.zip`, such as a set of prebuilt binaries with a
-Makefile that copies one, is used as it is, with no lookup on Github.
+Makefile that copies one, is used as it is, with no lookup on Github. With a
+bench of 0 it is played unchecked, as the client then skips the comparison.
 
 The opponents are kept as files in `luminex-integration/opponents/`, one
 `<Name>.json` each, in the format of `import_engines` with a `rated` object:
 
     python3 manage.py import_engines luminex-integration/opponents/
 
+Building and benching is not enough. Three engines that did both lost games
+to the match runner on staging: two send promotions in upper case, one aborts
+when its search thread starts. Play a few dozen games against a new opponent
+on a staging copy before relying on it.
+
 ### The opponents in this repository
 
-Thirteen engines, each at the exact version the lists rate. Every one was built
+Twelve engines, each at the exact version the lists rate. Every one was built
 and benched on a Xeon 8269CY with gcc 16.2 through the client's own build and
-bench functions, and its bench equals the one its author gives for the tag.
-The workers have gcc 14.2, which was not available for the check.
+bench functions, its bench equals the one its author gives for the tag, and it
+played 40 or more games against Luminex on a staging copy of the server
+without a crash, a time loss or an illegal move. The workers have gcc 14.2,
+which was not available for the check.
 
 | engine | tag | bench | CCRL Blitz | CCRL 40/15 | CCI STC / LTC / VLTC |
 | --- | --- | ---: | ---: | ---: | --- |
 | Stash | v37.0 | 4646465 | 3417 | 3373 | |
 | Smallbrain | 7.0.0 | 3734449 | 3454 | 3382 | |
-| Midnight | v9 | 7758763 | 3477 | 3392 | |
 | Rice | 8.0.0 | 6151992 | 3530 | 3432 | |
+| Patricia | 5 | 3296690 | 3539 | 3459 | |
 | Elixir | v3.0 | 3614368 | 3567 | 3496 | |
 | Altair | v7.0.0 | 8687679 | 3579 | 3474 | 3170 / 3432 / 3478 |
 | Renegade | v1.3.0 | 5112160 | 3694 | | |
-| Devre | v7.0 | 1209674 | 3704 | 3583 | |
 | Quanticade | Cronus-3.0 | 3187919 | 3716 | 3588 | 3332 / 3645 / 3695 |
 | Clover | v9.1 | 5182021 | 3726 | 3585 | 3453 / 3663 / 3706 |
 | Berserk | 14 | 2811728 | 3737 | 3601 | 3465 / 3688 / 3721 |
@@ -121,15 +132,19 @@ The ratings are the single-CPU entries of the lists as computed on 2026-11-07
 CCRL show the 4-CPU or 8-CPU entry of many engines, which is not the one to
 anchor a one-thread game on.
 
-Also built and benched in the same way, and usable by adding a file: Willow 4.0
-(3531; its bench takes 20 seconds), Patricia 5 (3539; plays for attacks by
-design, so its results depend on the opponent more than most), Astra 7.0
-(3730), Caissa 2.0 (3748), Integral v8 (3751).
+Patricia plays for attacks by design, so its results may depend on the
+opponent more than most. Its 40 staging games were in line with its rating.
+
+Built and benched in the same way, but not yet played: Astra 7.0 (3730),
+Caissa 2.0 (3748), Integral v8 (3751).
 
 Tried, and not usable as they are:
 
 | engine | why |
 | --- | --- |
+| Midnight v9, Willow 4.0 | send promotions in upper case (`c7c8Q`), which the match runner takes for an illegal move: each lost 10 of some 45 games that way |
+| Devre v7.0 | its statically linked binary aborts when the search thread starts, on the test machine: it lost all 48 games by disconnecting. Untested on the workers |
+| Molybdenum 4.1 | the same abort, already in `bench` |
 | Sirius 9.0, Stormphrax 8.0.0 | need clang and lld |
 | Koivisto 9.0 | its network is a git submodule, which a source archive lacks |
 | Seer 2.8.0, RubiChess 20240817 | the network has to be handed to the build as EVALFILE |
@@ -137,12 +152,21 @@ Tried, and not usable as they are:
 | Tucano 12.00 | the network is a separate file read at run time; no usable `bench` |
 | Halogen 16 | uses AVX-512 VBMI2, which the test machine lacks; untested, may build on the workers |
 | BlackCore 6.0, Raphael 4.2.0 | do not compile with gcc 16 (a standard header is not included) |
-| Molybdenum 4.1 | its statically linked binary aborted in `bench` on the test machine |
 
 Between 3580 and 3690 on CCRL Blitz nothing usable was found, as the engines
 there (Koivisto, Seer, RubiChess, Ethereal) all need their network handed in.
 The client can do that for an engine whose network is registered on the server,
 which would be the way to add them.
+
+### An opponent that misbehaves
+
+A red star next to an opponent means a crash or an illegal move in its games,
+and the Time and Crash columns count the games lost that way. Such games are
+not chess, and the rating shows it: its spread and its error grow, by hundreds
+of points if the opponent lost every game. Look at the test's own page, and if
+the games are no good, delete that test there. The opponent then leaves the
+rating and the totals, but stays listed on the gauntlet's page, marked as
+deleted. Its own page restores it, and so does Restore on a deleted gauntlet.
 
 ## The rating
 
@@ -166,16 +190,22 @@ that make the games most likely.
   weak prior then holds the scale at the list's nominal one, which is 1 unless
   `rating_list_scales` in `Config/config.json` says otherwise. The fit is then
   the plain one: the anchor plus the Elo difference.
-- **Error.** The 95% errors come from the measured variance of the points,
-  taking a pair of games on one opening as a single observation, so draws and
-  the pairing of games both narrow them. They only cover the luck of the games.
-  The error of the rating grows by itself when the rating lies outside of the
-  opponents' ratings, as it then leans on the scale.
+- **From games.** The luck of the games, as a 95% error. It comes from the
+  measured variance of the points, taking a pair of games on one opening as a
+  single observation, so draws and the pairing of games both narrow it. It
+  grows by itself when the rating lies outside of the opponents' ratings, as
+  the rating then leans on the scale, and it includes how little is known of
+  a scale that the prior has to hold: one opponent 300 points away gives an
+  error of some 240 points, one opponent of our own strength the usual one.
+  More games shrink it.
 - **Spread.** The anchors are estimates themselves. So the opponents may
   disagree about R by more than their games explain. The spread is that extra
   disagreement: how far off each anchor has to be, as a standard deviation in
-  rating points, to account for the points that the fit misses. "Error with
-  spread" includes it, and is the one to quote when the spread is not small.
+  rating points, to account for the points that the fit misses. It takes
+  three opponents to see it, and more opponents, not more games, to dilute it.
+- **Error.** The 95% error quoted next to a rating, on every page: the luck
+  of the games and the spread together. (In the json these are `error` for
+  the games alone and `error_with_spread` for the two together.)
 - **Per opponent.** Implied is the anchor plus the Elo difference of the games
   against that opponent alone, times the scale. Expected is the score that the
   fit predicts against it. An opponent whose score is far from the expected
@@ -188,9 +218,9 @@ that make the games most likely.
 
 Simulated gauntlets, played from a known rating with draws and paired games,
 check the fit in `OpenBench/tests.py`. With the build rated among its five
-opponents, the 95% error covered the true rating in 377 of 400 runs. With the
+opponents, the 95% error covered the true rating in 379 of 400 runs. With the
 build weaker than all five, on a list 1.3 times as wide as our games, it did in
-368 of 400, with the error widening from 14 to 34 points by itself. Held at a
+373 of 400, with the error widening from 14 to 37 points by itself. Held at a
 scale of 1, the fit puts that second build 41 points too high, with an error
 of 17.
 
