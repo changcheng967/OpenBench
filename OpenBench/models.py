@@ -68,6 +68,16 @@ class EngineConfig(Model):
     # { 'test_presets' : {...}, 'tune_presets' : {...}, 'datagen_presets' : {...} }
     presets = JSONField(default=dict, blank=True)
 
+    # (Luminex fork) The build that the published ratings belong to, which is
+    # what a Gauntlet plays against: a tag, branch or commit of the source,
+    # the commit it resolved to, and its bench. The ratings are kept per list,
+    # as { 'CCRL Blitz' : 3417, ... }. An Engine without ratings is never an
+    # opponent. None of this is part of build(), so editing it restarts no one.
+    rated_branch = CharField(max_length=64, blank=True)
+    rated_sha    = CharField(max_length=64, blank=True)
+    rated_bench  = IntegerField(default=0)
+    ratings      = JSONField(default=dict, blank=True)
+
     def __str__(self):
         return self.name
 
@@ -349,6 +359,36 @@ class PGN(Model):
 
     def filename(self):
         return '%s.%s.%s.pgn.bz2' % (self.test_id, self.result_id, self.book_index)
+
+class Gauntlet(Model):
+
+    # (Luminex fork) One Dev build against a list of rated opponents. Each
+    # opponent is played in an ordinary fixed-games Test, so the Workers and
+    # the assignment of Workloads know nothing of Gauntlets. All of the
+    # settings and results live in those Tests; see OpenBench/gauntlets.py
+
+    author      = CharField(max_length=64)
+    info        = CharField(max_length=1024, default='', blank=True)
+    rating_list = CharField(max_length=32) # List that the headline rating is on
+    creation    = DateTimeField(auto_now_add=True)
+
+    # { list : points of that list per Elo point }, for the lists where that is
+    # not 1, as the Server's config had them when this was created
+    scales      = JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return 'Gauntlet %d' % (self.id)
+
+class GauntletOpponent(Model):
+
+    gauntlet = ForeignKey('Gauntlet', CASCADE, related_name='opponents')
+    test     = OneToOneField('Test', CASCADE, related_name='gauntlet_opponent')
+
+    # The opponent's EngineConfig.ratings, as they were when this was created
+    ratings  = JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return 'Gauntlet %d Test %d' % (self.gauntlet_id, self.test_id)
 
 class SPSARun(Model):
 

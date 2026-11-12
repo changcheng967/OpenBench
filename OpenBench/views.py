@@ -25,6 +25,7 @@ import django.shortcuts
 import django.contrib.auth
 
 import OpenBench.config
+import OpenBench.gauntlets
 import OpenBench.model_utils
 import OpenBench.spsa_utils
 import OpenBench.utils
@@ -271,12 +272,15 @@ def index(request, page=1):
     active    = OpenBench.utils.get_active_tests()
     completed = OpenBench.utils.get_completed_tests()
 
+    # (Luminex fork) A Gauntlet takes one row, not one per opponent
+    pending, active, completed = OpenBench.gauntlets.collapse_test_lists(pending, active, completed)
+
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'index')
 
     data = {
         'pending'   : pending,
         'active'    : OpenBench.utils.group_active_tests_by_priority(active),
-        'completed' : completed[start:end],
+        'completed' : OpenBench.gauntlets.attach_summaries(completed[start:end]),
         'paging'    : paging,
         'status'    : OpenBench.utils.getMachineStatus(),
     }
@@ -289,12 +293,15 @@ def user(request, username, page=1):
     active    = OpenBench.utils.get_active_tests().filter(author=username)
     completed = OpenBench.utils.get_completed_tests().filter(author=username)
 
+    # (Luminex fork) A Gauntlet takes one row, not one per opponent
+    pending, active, completed = OpenBench.gauntlets.collapse_test_lists(pending, active, completed)
+
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'user/%s' % (username))
 
     data = {
         'pending'   : pending,
         'active'    : OpenBench.utils.group_active_tests_by_priority(active),
-        'completed' : completed[start:end],
+        'completed' : OpenBench.gauntlets.attach_summaries(completed[start:end]),
         'paging'    : paging,
         'status'    : OpenBench.utils.getMachineStatus(username),
     }
@@ -303,7 +310,9 @@ def user(request, username, page=1):
 
 def greens(request, page=1):
 
+    # (Luminex fork) Scoring above 50% against an opponent of a Gauntlet is not a pass
     completed = OpenBench.utils.get_completed_tests().filter(passed=True)
+    completed = OpenBench.gauntlets.without_gauntlets(completed)
     start, end, paging = OpenBench.utils.getPaging(completed, int(page), 'greens')
 
     data = { 'completed' : completed[start:end], 'paging' : paging }
@@ -521,6 +530,21 @@ def new_workload(request, workload_type):
 
     return create_workload(request, workload_type.upper())
 
+# (Luminex fork) A Gauntlet is a group of Tests, so it has views of its own
+
+def gauntlet(request, pk, action=None):
+
+    if action != None:
+        return OpenBench.gauntlets.modify_gauntlet(request, pk, action.upper())
+
+    return OpenBench.gauntlets.view_gauntlet(request, pk)
+
+def new_gauntlet(request):
+    return OpenBench.gauntlets.create_gauntlet(request)
+
+def gauntlets(request, page=1):
+    return OpenBench.gauntlets.list_gauntlets(request, page)
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 #                          NETWORK MANAGEMENT VIEWS                           #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -667,6 +691,7 @@ def manage_engines(request, name=None, action=None):
             'engine_config'     : config,
             'can_manage'        : can_manage,
             'presets'           : json.dumps(config.presets, indent=4),
+            'ratings'           : json.dumps(config.ratings),
         }
         return render(request, 'manage_engine.html', data)
 
@@ -700,6 +725,9 @@ def scripts(request):
 
     if request.POST['action'] == 'CREATE_TEST':
         return new_workload(request, "TEST")
+
+    if request.POST['action'] == 'CREATE_GAUNTLET':
+        return new_gauntlet(request)
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 #                              CLIENT HOOK VIEWS                              #
@@ -1165,6 +1193,17 @@ def api_workload(request, workload_id, query):
 
     valid_endpoints = [ 'results', 'info', 'summary' ]
     return api_response({ 'error' : 'Valid /query/ endpoints are: [ %s ]' % (', '.join(valid_endpoints)) })
+
+@csrf_exempt
+def api_gauntlet(request, gauntlet_id):
+
+    if not api_authenticate(request):
+        return api_response({ 'error' : 'API requires authentication for this server' })
+
+    if not (summary := OpenBench.gauntlets.find_summary(gauntlet_id)):
+        return api_response({ 'error' : 'Requested Gauntlet Id does not exist' })
+
+    return api_response({ 'gauntlet' : OpenBench.gauntlets.gauntlet_to_dict(summary) })
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 #                                BUSINESS VIEWS                               #

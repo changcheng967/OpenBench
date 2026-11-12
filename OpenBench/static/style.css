@@ -634,3 +634,36 @@ td pre {
     border: 1px solid #ccc;
     border-radius: 8px;
 }
+
+/* (Luminex fork) Gauntlets */
+
+#content .gauntlet-note {
+    color: var(--color-font2);
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: 64em;
+    white-space: normal;
+}
+
+#content .gauntlet-opponents td {
+    font-size: 14px;
+}
+
+/* One row per opponent, with a dozen columns: keep them narrow enough for a laptop */
+
+#content .gauntlet-table th, #content .gauntlet-table td {
+    font-size: 13px;
+    padding: 9px 8px 5px;
+}
+
+#content .gauntlet-table td.gauntlet-opponent {
+    white-space: normal;
+}
+
+#content .gauntlet-table tr.gauntlet-removed td {
+    opacity: 0.5;
+}
+
+#content .gauntlet-opponents input[type="checkbox"] {
+    cursor: pointer;
+}

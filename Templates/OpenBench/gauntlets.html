@@ -1,0 +1,52 @@
+{% extends "OpenBench/base.html" %}
+
+{% block title %}Gauntlets{% endblock %}
+
+{% load mytags %}
+
+{% block content %}
+
+    <!-- Every Gauntlet, newest first: how the rating of the Dev builds has moved -->
+    <table class="stripes hoverable w-100">
+
+        <tr class="table-header">
+            <th>#</th>
+            <th>Date</th>
+            <th>Engine</th>
+            <th>Build</th>
+            <th>Network</th>
+            <th>Time</th>
+            <th>Rating</th>
+            <th>List</th>
+            <th>Games</th>
+            <th>Opponents</th>
+        </tr>
+
+        {% for gauntlet in gauntlets %}
+            <tr>
+                <td><a href="/gauntlet/{{gauntlet.id}}/">{{gauntlet.id}}</a></td>
+                <td class="datestamp">{{gauntlet.creation|date:'U'}}</td>
+                <td>{{gauntlet.first.dev_engine}}</td>
+                <td><a href="/gauntlet/{{gauntlet.id}}/">{{gauntlet.first.dev.name|prettyName}}</a></td>
+                <td>{{gauntlet.first.dev_netname}}</td>
+                <td>{{gauntlet.first.dev_time_control}}</td>
+                {% with fit=gauntlet.fit %}
+                    {% if fit %}
+                        <td class="numeric">{{fit.rating|floatformat:0}} ± {{fit.error_with_spread|floatformat:0}}</td>
+                    {% else %}
+                        <td class="numeric">Pending</td>
+                    {% endif %}
+                {% endwith %}
+                <td>{{gauntlet.gauntlet.rating_list}}</td>
+                <td class="numeric">{{gauntlet.games}} / {{gauntlet.planned}}</td>
+                <td class="numeric">{{gauntlet.tests|length}}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="10">No Gauntlet has been created yet</td></tr>
+        {% endfor %}
+
+    </table>
+
+    {% include "OpenBench/Blocks/pagebrowser.html" %}
+
+{% endblock %}

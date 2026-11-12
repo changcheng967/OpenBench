@@ -1,0 +1,33 @@
+{
+    "private": false,
+    "nps": 880000,
+    "source": "https://github.com/jhonnold/berserk",
+    "build": {
+        "path": "src",
+        "compilers": [
+            "gcc",
+            "gcc-14",
+            "gcc-13"
+        ],
+        "cpuflags": [
+            "AVX2",
+            "FMA",
+            "POPCNT"
+        ],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "14",
+        "sha": "8ae895a6151695be4a50d4fb65b0c131659c513a",
+        "bench": 2811728,
+        "ratings": {
+            "CCRL Blitz": 3737,
+            "CCRL 40/15": 3601,
+            "CCI STC": 3465,
+            "CCI LTC": 3688,
+            "CCI VLTC": 3721
+        }
+    }
+}

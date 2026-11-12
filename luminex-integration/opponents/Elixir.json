@@ -1,0 +1,26 @@
+{
+    "private": false,
+    "nps": 540000,
+    "source": "https://github.com/ArjunBasandrai/elixir-chess-engine",
+    "build": {
+        "path": "",
+        "compilers": [
+            "g++>=12",
+            "g++-14",
+            "g++-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "v3.0",
+        "sha": "49be1a222b67d0bbabd5e60ffd192087bd09e399",
+        "bench": 3614368,
+        "ratings": {
+            "CCRL Blitz": 3567,
+            "CCRL 40/15": 3496
+        }
+    }
+}

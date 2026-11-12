@@ -1,0 +1,1001 @@
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+#                                                                             #
+#   OpenBench is a chess engine testing framework authored by Andrew Grant.   #
+#   <https://github.com/AndyGrant/OpenBench>           <andrew@grantnet.us>   #
+#                                                                             #
+#   OpenBench is free software: you can redistribute it and/or modify         #
+#   it under the terms of the GNU General Public License as published by      #
+#   the Free Software Foundation, either version 3 of the License, or         #
+#   (at your option) any later version.                                       #
+#                                                                             #
+#   OpenBench is distributed in the hope that it will be useful,              #
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of            #
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the             #
+#   GNU General Public License for more details.                              #
+#                                                                             #
+#   You should have received a copy of the GNU General Public License         #
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.     #
+#                                                                             #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# (Luminex fork) Gauntlets: one Dev build against a list of rated opponents,
+# to place the Dev build on a rating list instead of measuring it against
+# another build of itself.
+#
+# A Gauntlet is a group of ordinary fixed-games Tests, one per opponent, tied
+# together by GauntletOpponent rows. Workers are handed those Tests, play them
+# and report them like any others. This module adds what surrounds them:
+#
+# >>> create_gauntlet(request)              The form, and its submission
+# >>> view_gauntlet(request, pk)            Results of every opponent, and the rating
+# >>> modify_gauntlet(request, pk, action)  One action, applied to every Test
+# >>> collapse_test_lists(...)              One row per Gauntlet in the lists of Tests
+# >>> fit_rating(samples)                   The rating that explains all the games
+
+import math
+import re
+
+from django.db import transaction
+from django.db.models import Count, Max, Q, Sum
+
+import OpenBench.model_utils
+import OpenBench.stats
+import OpenBench.utils
+import OpenBench.views
+
+from OpenBench.config import OPENBENCH_CONFIG
+from OpenBench.models import *
+from OpenBench.workloads import verify_workload as verify
+
+ELO_PER_LOGIT = 400.0 / math.log(10.0)
+
+# How firmly the scale of a list is held at its nominal value, as the standard
+# deviation of the scale's logarithm. Weak: a dozen opponents with a few
+# hundred games each outweigh it a hundredfold. It only decides the matter
+# when the games cannot.
+SCALE_PRIOR = 0.4
+
+## The rating
+
+def expected_score(rating, anchor, scale=1.0):
+    return 1.0 / (1.0 + 10.0 ** max(-300.0, min(300.0, (anchor - rating) / (400.0 * scale))))
+
+def nominal_scales(lists):
+
+    # Lists whose points are not Elo points say so in the Server's config, as
+    # "rating_list_scales". CCI, for one, multiplies its ratings by 1.35
+
+    configured = OPENBENCH_CONFIG.get('rating_list_scales', {})
+    return { name : float(configured[name]) for name in lists if name in configured }
+
+def score_stats(test):
+
+    # The games played, the points scored, and the variance of those points.
+    # A pair of games on one opening is a single observation, as its two games
+    # are far from independent. Draws and that pairing both shrink the variance,
+    # which is measured here rather than assumed.
+
+    if test.use_penta:
+        counts, points, games_each = test.as_penta(), [0.0, 0.5, 1.0, 1.5, 2.0], 2
+    else:
+        counts, points, games_each = test.as_tri(), [0.0, 0.5, 1.0], 1
+
+    observed = sum(counts)
+    total    = sum(n * x for n, x in zip(counts, points))
+
+    if not observed:
+        return 0, 0.0, 0.0
+
+    # The squared deviations give the variance of the total, once one more
+    # observation is counted in at the widest spread that independent games
+    # allow. Among hundreds of observations it is lost. Among a handful it keeps
+    # four identical pairs from passing for a result that is certain
+    mean    = total / observed
+    squares = sum(n * (x - mean) ** 2 for n, x in zip(counts, points))
+
+    return games_each * observed, total, squares + 0.25 * games_each
+
+def fit_rating(samples, nominal=1.0):
+
+    # The rating that explains the games, given [(anchor, games, points, variance), ...]:
+    # one tuple per opponent, with the opponent's published rating as the anchor.
+    #
+    # A game against an opponent is taken to score, on average,
+    #     E = 1 / (1 + 10^((anchor - R) / (400 * scale)))
+    # and a draw counts as half a win and half a loss, so the log-likelihood is
+    #     sum of  points * ln(E) + (games - points) * ln(1 - E)
+    #
+    # Two things are fitted. R is the rating: it sits where the points expected
+    # against all of the opponents equal the points scored. The scale is how
+    # many points of the list one Elo point of ours is worth. It is not 1: a
+    # list is measured at its own time control, where the gaps between engines
+    # are narrower or wider than at ours, and some lists stretch their ratings.
+    # The games show the scale as the slope of our scores against the anchors.
+    # With too few or too similar opponents to show it, a weak prior holds it
+    # at the list's nominal scale, and the fit is then the plain one.
+    #
+    # The 95% errors come from the measured variance of the points (see
+    # score_stats), not from the likelihood, which knows nothing of draws. Where
+    # the prior holds the scale, its width is in them too: a scale that the
+    # games cannot show is not known, and a rating far from the anchors is
+    # then not known either.
+    #
+    # They only count the luck of the games. The anchors are estimates too, so
+    # opponents may disagree about R by more than their games explain. The
+    # spread is that extra disagreement: how far off, as a standard deviation
+    # in rating points, each anchor has to be to account for the points that
+    # the fit does not. error_with_spread adds its effect on R.
+
+    samples = [sample for sample in samples if sample[1] > 0]
+    games   = sum(sample[1] for sample in samples)
+    points  = sum(sample[2] for sample in samples)
+
+    # Without both a point scored and a point dropped, the rating has no bound
+    if not samples or points <= 0 or points >= games:
+        return None
+
+    centre = -math.log(nominal)
+
+    def terms(rating, log_slope):
+
+        # Per opponent: the expected share of the points, the variance that a
+        # game of only wins and losses would have, and how the exponent moves
+        # with the rating and with the log of the slope
+
+        slope, parts = math.exp(log_slope) / ELO_PER_LOGIT, []
+
+        for anchor, n, _, _ in samples:
+            exponent = max(-700.0, min(700.0, slope * (rating - anchor)))
+            share    = min(max(1.0 / (1.0 + math.exp(-exponent)), 1e-12), 1.0 - 1e-12)
+            parts.append((share, n * share * (1.0 - share), slope, exponent))
+
+        return parts
+
+    def likelihood(rating, log_slope):
+
+        total = -(log_slope - centre) ** 2 / (2.0 * SCALE_PRIOR ** 2)
+        for (share, _, _, _), (_, n, scored, _) in zip(terms(rating, log_slope), samples):
+            total += scored * math.log(share) + (n - scored) * math.log(1.0 - share)
+
+        return total
+
+    def curvature(parts, weights):
+
+        # Sum of weight * J J', where J is how an exponent moves with (rating, log slope)
+
+        matrix = [[0.0, 0.0], [0.0, 0.0]]
+        for (_, _, by_rating, by_slope), weight in zip(parts, weights):
+            matrix[0][0] += weight * by_rating * by_rating
+            matrix[0][1] += weight * by_rating * by_slope
+            matrix[1][1] += weight * by_slope * by_slope
+        matrix[1][0] = matrix[0][1]
+
+        return matrix
+
+    def inverse(matrix):
+        det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0] or 1e-300
+        return [[matrix[1][1] / det, -matrix[0][1] / det], [-matrix[1][0] / det, matrix[0][0] / det]]
+
+    def product(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(2)) for j in range(2)] for i in range(2)]
+
+    # Start from the rating that the nominal scale gives. The points expected
+    # rise with the rating, so bisection finds it
+
+    low  = min(sample[0] for sample in samples) - 4000.0 * nominal
+    high = max(sample[0] for sample in samples) + 4000.0 * nominal
+
+    for _ in range(64):
+        rating = (low + high) / 2.0
+        if sum(n * expected_score(rating, anchor, nominal) for anchor, n, _, _ in samples) < points: low = rating
+        else: high = rating
+
+    # Newton's method on both, halving any step that would lower the likelihood
+
+    log_slope = centre
+    reached   = likelihood(rating, log_slope)
+
+    for _ in range(200):
+
+        parts    = terms(rating, log_slope)
+        gradient = [0.0, -(log_slope - centre) / SCALE_PRIOR ** 2]
+
+        for (share, _, by_rating, by_slope), (_, n, scored, _) in zip(parts, samples):
+            gradient[0] += (scored - n * share) * by_rating
+            gradient[1] += (scored - n * share) * by_slope
+
+        hessian = curvature(parts, [part[1] for part in parts])
+        hessian[1][1] += 1.0 / SCALE_PRIOR ** 2
+
+        step = inverse(hessian)
+        step = [step[0][0] * gradient[0] + step[0][1] * gradient[1], step[1][0] * gradient[0] + step[1][1] * gradient[1]]
+
+        factor = 1.0
+        while factor > 1e-9 and likelihood(rating + factor * step[0], log_slope + factor * step[1]) < reached:
+            factor /= 2.0
+
+        if factor <= 1e-9:
+            break
+
+        rating, log_slope = rating + factor * step[0], log_slope + factor * step[1]
+        reached = likelihood(rating, log_slope)
+
+        if abs(factor * step[0]) + abs(factor * step[1]) < 1e-9:
+            break
+
+    parts   = terms(rating, log_slope)
+    binary  = [part[1] for part in parts]
+    data    = curvature(parts, binary)
+    hessian = [row[:] for row in data]
+    hessian[1][1] += 1.0 / SCALE_PRIOR ** 2
+    solved  = inverse(hessian)
+
+    def covariance(weights, prior=0.0):
+        middle = curvature(parts, weights)
+        middle[1][1] += prior
+        return product(product(solved, middle), solved)
+
+    luck = covariance([sample[3] for sample in samples], 1.0 / SCALE_PRIOR ** 2)
+
+    # The spread. An anchor that is off by x moves the points expected against
+    # its opponent by x times what a rating point is worth there. The squared
+    # misses of the fit, beyond what the luck of the games and the fitting of
+    # the parameters explain, are put down to that.
+
+    count    = len(samples)
+    used     = sum(data[i][j] * solved[j][i] for i in range(2) for j in range(2))
+    floors   = [max(sample[3], 0.1 * each) for sample, each in zip(samples, binary)]
+    worth    = [(each * part[2]) ** 2 for each, part in zip(binary, parts)]
+    misses   = sum((sample[2] - sample[1] * part[0]) ** 2 / floor for sample, part, floor in zip(samples, parts, floors))
+    leverage = sum(each / floor for each, floor in zip(worth, floors)) * (count - used) / count
+
+    # Fewer than three opponents cannot tell disagreement from the scale
+    spread = 0.0
+    if count >= 3 and count - used > 0.5 and leverage > 0:
+        spread = math.sqrt(max(0.0, (misses - (count - used)) / leverage))
+
+    anchors = covariance([spread ** 2 * each for each in worth])
+    scale   = math.exp(-log_slope)
+
+    return {
+        'rating'            : rating,
+        'error'             : 1.96 * math.sqrt(max(0.0, luck[0][0])),
+        'spread'            : spread,
+        'error_with_spread' : 1.96 * math.sqrt(max(0.0, luck[0][0] + anchors[0][0])),
+        'scale'             : scale,
+        'scale_error'       : 1.96 * scale * math.sqrt(max(0.0, luck[1][1] + anchors[1][1])),
+        'opponents'         : count,
+        'games'             : games,
+    }
+
+## Opponents
+
+def rated_engines():
+
+    # Engines that have a rating on at least one list, and a build to play: a
+    # rated branch, or a source that is an archive in itself. Strongest first,
+    # going by each one's best rating, as the lists are on different scales
+
+    configs = [
+        config for config in EngineConfig.objects.filter(enabled=True)
+        if config.ratings and (config.rated_branch or config.source.endswith('.zip'))
+    ]
+
+    return sorted(configs, key=lambda config: (-max(config.ratings.values()), config.name))
+
+def rating_lists(ratings):
+
+    # Names of the lists across many { list : rating }, the most used ones first
+
+    counts = {}
+    for rated in ratings:
+        for name in rated:
+            counts[name] = counts.get(name, 0) + 1
+
+    return sorted(counts, key=lambda name: (-counts[name], name))
+
+def verify_ratings(ratings):
+
+    # Returns an error message, or None, for an EngineConfig.ratings value
+
+    if type(ratings) != dict:
+        return 'Ratings must be a json object, such as { "CCRL Blitz" : 3417 }'
+
+    for name, rating in ratings.items():
+
+        if not re.fullmatch(r'[a-zA-Z0-9 /_.+-]{1,32}', name):
+            return 'Rating lists are named with 1-32 of [a-zA-Z0-9 /_.+-]'
+
+        if type(rating) not in (int, float) or not 0 < rating < 10000:
+            return 'The rating on %s must be a number' % (name)
+
+    return None
+
+class FormData(object):
+
+    # The functions of verify_workload read their input from a request's POST.
+    # This carries the same fields for an opponent, which has no form of its own
+
+    def __init__(self, **fields):
+        self.POST = fields
+
+def opponent_build(errors, config):
+
+    # Returns (source, name, sha, bench) for the rated build of an Engine
+
+    name = config.rated_branch
+
+    # A source that is itself an archive, such as a set of prebuilt binaries,
+    # is used as it is. There is no branch to look up, and no commit to name.
+    # A bench of 0 is passed on, and the Client then compares it with nothing
+    if config.source.endswith('.zip'):
+        stem = config.source.split('/')[-1].removesuffix('.zip')
+        return (config.source, name or stem, stem, config.rated_bench)
+
+    if not name:
+        errors.append('%s has no rated branch to play against' % (config.name))
+        return None
+
+    sha, bench = config.rated_sha, config.rated_bench
+
+    # Ask Github once, and keep the answer, as tags do not move. Without a
+    # bench, the same request reads one out of the commit message
+    if not sha or not bench:
+
+        fields = FormData(
+            base_engine = config.name,
+            base_repo   = config.source,
+            base_branch = name,
+            base_bench  = str(bench) if bench else '',
+        )
+
+        if not (found := verify.collect_github_info(errors, fields, 'base')):
+            return None
+
+        sha, bench = found[2], found[3]
+        EngineConfig.objects.filter(pk=config.pk).update(rated_sha=sha, rated_bench=bench)
+
+    # Plain archive links, unlike those of the API, are not rate limited, and
+    # are the ones that the Client retries through its proxy
+    source = OpenBench.utils.path_join(config.source, 'archive', '%s.zip' % (sha))
+    return (source, name, sha, bench)
+
+## Creation
+
+def form_defaults(engines, like=None):
+
+    # Settings to fill the form with, for each Engine: those of its latest Test.
+    # They are what the Engine is being tested with, whether or not it has presets.
+    # When repeating a Gauntlet, its Engine takes everything from that Gauntlet
+
+    fields = [
+        'dev_options', 'dev_time_control', 'book_name', 'upload_pgns',
+        'syzygy_wdl', 'syzygy_adj', 'win_adj', 'draw_adj', 'scale_nps',
+    ]
+
+    defaults = {}
+    for engine in engines:
+
+        latest = Test.objects.filter(dev_engine=engine.name, deleted=False)
+        latest = latest.filter(test_mode__in=['SPRT', 'GAMES']).order_by('-id').first()
+
+        defaults[engine.name] = { 'scale_nps' : engine.nps }
+        if latest:
+            defaults[engine.name] = { field : getattr(latest, field) for field in fields }
+
+    if like:
+        test, repeated = like.first, fields + ['dev_network', 'base_options', 'workload_size', 'priority', 'throughput']
+        defaults[test.dev_engine] = { field : getattr(test, field) for field in repeated }
+        defaults[test.dev_engine]['games'] = test.max_games
+
+    return defaults
+
+def create_gauntlet(request):
+
+    if not request.user.is_authenticated:
+        return OpenBench.views.redirect(request, '/login/', error='Only enabled users can create tests')
+
+    if not Profile.objects.get(user=request.user).enabled:
+        return OpenBench.views.redirect(request, '/login/', error='Only enabled users can create tests')
+
+    if request.method == 'GET':
+
+        engines   = EngineConfig.objects.filter(enabled=True).order_by('name')
+        opponents = rated_engines()
+
+        # ?like=<id> repeats a Gauntlet for another build: same settings, same
+        # opponents. Otherwise every opponent is ticked, on the latest list used
+        like = find_summary(request.GET.get('like'))
+        last = like.gauntlet if like else Gauntlet.objects.order_by('-id').first()
+
+        data = {
+            'networks'     : list(Network.objects.all().values()),
+            'books'        : Book.objects.filter(enabled=True).order_by('name'),
+            'engines'      : engines,
+            'opponents'    : opponents,
+            'ticked'       : [test.base_engine for test in like.tests] if like else [config.name for config in opponents],
+            'rating_lists' : rating_lists([config.ratings for config in opponents]),
+            'rating_list'  : last.rating_list if last else None,
+            'dev_engine'   : like.first.dev_engine if like else Profile.objects.get(user=request.user).engine,
+            'defaults'     : form_defaults(engines, like),
+
+            # The source and the networks are applied by create_workload.js
+            'engine_configs' : {
+                engine.name : OpenBench.model_utils.engine_config_to_dict(engine)
+                for engine in engines
+            },
+        }
+
+        return OpenBench.views.render(request, 'create_gauntlet.html', data)
+
+    gauntlet, errors = create_new_gauntlet(request)
+
+    if errors:
+        return OpenBench.views.redirect(request, '/gauntlet/new/', error='\n'.join(errors))
+
+    return OpenBench.views.redirect(request, '/gauntlet/%d/' % (gauntlet.id), status='Gauntlet was Created!')
+
+def verify_gauntlet_creation(errors, request):
+
+    verifications = [
+
+        # Verify everything about the Dev Engine
+        (verify.verify_engine         , 'dev_engine', 'Dev Engine'),
+        (verify.verify_github_repo    , 'dev_repo'),
+        (verify.verify_network        , 'dev_network', 'Dev Network', 'dev_engine'),
+        (verify.verify_options        , 'dev_options', 'Threads', 'Dev Options'),
+        (verify.verify_options        , 'dev_options', 'Hash', 'Dev Options'),
+        (verify.verify_time_control   , 'dev_time_control', 'Time Control'),
+
+        # Verify what is shared by all of the opponents
+        (verify.verify_options        , 'base_options', 'Threads', 'Opponent Options'),
+        (verify.verify_options        , 'base_options', 'Hash', 'Opponent Options'),
+        (verify.verify_integer        , 'games', 'Games'),
+        (verify.verify_greater_than   , 'games', 'Games', 0),
+
+        # Verify everything about the General Settings
+        (verify.verify_book           , 'book_name', 'Book'),
+        (verify.verify_upload_pgns    , 'upload_pgns', 'Upload PGNs'),
+        (verify.verify_integer        , 'priority', 'Priority'),
+        (verify.verify_integer        , 'throughput', 'Throughput'),
+        (verify.verify_greater_than   , 'throughput', 'Throughput', 0),
+        (verify.verify_syzygy_field   , 'syzygy_wdl', 'Syzygy WDL'),
+
+        # Verify everything about the Workload Settings
+        (verify.verify_integer        , 'workload_size', 'Workload Size'),
+        (verify.verify_greater_than   , 'workload_size', 'Workload Size', 0),
+
+        # Verify the Scaling Mechanisms
+        (verify.verify_integer        , 'scale_nps', 'Scale NPS'),
+        (verify.verify_greater_than   , 'scale_nps', 'Scale NPS', 0),
+
+        # Verify everything about the Adjudicaton Settings
+        (verify.verify_syzygy_field   , 'syzygy_adj', 'Syzygy Adjudication'),
+        (verify.verify_win_adj        , 'win_adj'),
+        (verify.verify_draw_adj       , 'draw_adj'),
+    ]
+
+    for verification in verifications:
+        verification[0](errors, request, *verification[1:])
+
+def verify_opponents(errors, request):
+
+    # Returns the EngineConfig of each requested opponent, in the order given
+
+    names   = [name for name in request.POST.getlist('opponents') if name]
+    configs = { config.name : config for config in rated_engines() }
+
+    if not names:
+        errors.append('A Gauntlet needs at least one opponent')
+
+    for name in names:
+        if name not in configs:
+            errors.append('%s is not an enabled Engine with ratings' % (name))
+
+    if len(set(names)) != len(names):
+        errors.append('An opponent may only be listed once')
+
+    opponents = [configs[name] for name in names if name in configs]
+
+    if opponents and not any(request.POST.get('rating_list') in config.ratings for config in opponents):
+        errors.append('None of the opponents has a rating on the chosen Rating List')
+
+    return opponents
+
+def create_new_gauntlet(request):
+
+    # Returns (Gauntlet, None), or (None, errors) with nothing having been created
+
+    errors = []
+    verify_gauntlet_creation(errors, request)
+    opponents = verify_opponents(errors, request)
+
+    if errors:
+        return None, errors
+
+    # Collects all data from the Github API. The Dev build is looked up once,
+    # and each opponent only for as long as its commit is not yet known
+    dev_info = verify.collect_github_info(errors, request, 'dev')
+    builds   = [opponent_build(errors, config) for config in opponents]
+
+    if errors:
+        return None, errors
+
+    with transaction.atomic():
+
+        gauntlet = Gauntlet.objects.create(
+            author      = request.user.username,
+            info        = verify.determine_info(request, dev_info[4])[:1024],
+            rating_list = request.POST['rating_list'],
+            scales      = nominal_scales(rating_lists([config.ratings for config in opponents])),
+        )
+
+        # One Engine for the Dev build, shared by all of the Tests
+        dev = Engine.objects.create(name=dev_info[1], source=dev_info[0], sha=dev_info[2], bench=dev_info[3])
+
+        for config, build in zip(opponents, builds):
+
+            test                   = Test()
+            test.author            = request.user.username
+            test.book_name         = request.POST['book_name']
+            test.upload_pgns       = request.POST['upload_pgns']
+            test.info              = 'Gauntlet %d' % (gauntlet.id)
+
+            test.dev               = dev
+            test.dev_repo          = request.POST['dev_repo']
+            test.dev_engine        = request.POST['dev_engine']
+            test.dev_options       = request.POST['dev_options']
+            test.dev_network       = request.POST['dev_network']
+            test.dev_time_control  = OpenBench.utils.TimeControl.parse(request.POST['dev_time_control'])
+
+            # Opponents come with their own networks, and play at our time control
+            test.base              = Engine.objects.create(name=build[1], source=build[0], sha=build[2], bench=build[3])
+            test.base_repo         = config.source
+            test.base_engine       = config.name
+            test.base_options      = request.POST['base_options']
+            test.base_network      = ''
+            test.base_time_control = test.dev_time_control
+
+            test.workload_size     = int(request.POST['workload_size'])
+            test.priority          = int(request.POST['priority'])
+            test.throughput        = int(request.POST['throughput'])
+
+            test.syzygy_wdl        = request.POST['syzygy_wdl']
+            test.syzygy_adj        = request.POST['syzygy_adj']
+            test.win_adj           = request.POST['win_adj']
+            test.draw_adj          = request.POST['draw_adj']
+
+            # Scaling by the opponent would give every opponent its own time
+            # control, as each one has its own bench speed. Only the Dev build
+            # is the same in all of the Tests
+            test.scale_method      = Test.ScaleMethod.DEV
+            test.scale_nps         = int(request.POST['scale_nps'])
+
+            test.test_mode         = 'GAMES'
+            test.max_games         = int(request.POST['games'])
+
+            if test.dev_network:
+                test.dev_netname = Network.objects.get(engine=test.dev_engine, sha256=test.dev_network).name
+
+            test.save()
+
+            GauntletOpponent.objects.create(gauntlet=gauntlet, test=test, ratings=dict(config.ratings))
+
+            summary = 'CREATE P=%d TP=%d' % (test.priority, test.throughput)
+            LogEvent.objects.create(author=test.author, summary=summary, log_file='', test_id=test.id)
+
+        profile = Profile.objects.get(user=request.user)
+        profile.tests += 1
+        profile.save()
+
+        if not OPENBENCH_CONFIG['use_cross_approval'] and profile.approver:
+            Test.objects.filter(gauntlet_opponent__gauntlet=gauntlet).update(approved=True)
+
+    return gauntlet, None
+
+## Summaries
+
+class Summary(object):
+
+    # A Gauntlet together with its Tests, and everything that is derived from
+    # them. Templates use this in the place of a Test, for a row or for a page
+
+    def __init__(self, gauntlet, entries):
+
+        self.gauntlet = gauntlet
+        self.id       = gauntlet.id
+        self.author   = gauntlet.author
+        self.info     = gauntlet.info
+        self.creation = gauntlet.creation
+
+        # A Gauntlet is deleted by deleting its Tests. A Test that was deleted
+        # on its own, say for an opponent that kept crashing, is left out of the
+        # rating and of every total, but is still listed, so that it can be found
+        # and restored. Once all are deleted, the Gauntlet is shown as it was
+        self.deleted  = all(entry.test.deleted for entry in entries)
+        self.entries  = [entry for entry in entries if self.deleted or not entry.test.deleted]
+        self.removed  = [entry for entry in entries if entry not in self.entries]
+        self.tests    = [entry.test for entry in self.entries]
+        self.every    = [entry.test for entry in entries]
+
+        # The settings are shared, so any Test is able to speak for all of them
+        self.first    = self.tests[0] if self.tests else None
+
+        waiting       = [test for test in self.tests if not test.finished and not test.deleted]
+        self.pending  = any(not test.approved for test in waiting)
+        self.active   = bool(waiting) and not self.pending
+        self.finished = not waiting
+        self.stopped  = [test for test in self.tests if test.finished and not test.passed and not test.failed]
+        self.error    = any(test.error for test in self.tests)
+        self.priority = max([test.priority for test in self.tests], default=0)
+
+        self.games    = sum(test.games  for test in self.tests)
+        self.wins     = sum(test.wins   for test in self.tests)
+        self.losses   = sum(test.losses for test in self.tests)
+        self.draws    = sum(test.draws  for test in self.tests)
+        self.planned  = sum(test.max_games for test in self.tests)
+
+    def lists(self):
+        return rating_lists([entry.ratings for entry in self.entries])
+
+    def fit(self, rating_list=None):
+
+        rating_list = rating_list or self.gauntlet.rating_list
+
+        return fit_rating([
+            (entry.ratings[rating_list], *score_stats(entry.test))
+            for entry in self.entries if rating_list in entry.ratings
+        ], self.gauntlet.scales.get(rating_list, 1.0))
+
+    def fits(self):
+        return [{ 'list' : name, 'fit' : self.fit(name) } for name in self.lists()]
+
+    def rows(self, rating_list=None):
+
+        # One row per opponent, with the strongest first. An opponent without
+        # a rating on this list is still shown, with the results of its games
+
+        rating_list = rating_list or self.gauntlet.rating_list
+        fit         = self.fit(rating_list)
+        scale       = fit['scale'] if fit else self.gauntlet.scales.get(rating_list, 1.0)
+        rows        = []
+
+        # Games lost on time or to a crash, by either side. An opponent that
+        # does not cope with our time control is no measure of anything
+        faults = Result.objects.filter(test_id__in=[test.id for test in self.every]).values('test_id')
+        faults = { row['test_id'] : row for row in faults.annotate(timeloss=Sum('timeloss'), crashes=Sum('crashes')) }
+
+        for entry in self.entries + self.removed:
+
+            test                = entry.test
+            games, points, _    = score_stats(test)
+            lower, elo, upper   = OpenBench.stats.Elo(test.results())
+            anchor              = entry.ratings.get(rating_list)
+            removed             = entry in self.removed
+            rated               = games and anchor != None and not removed
+
+            row = {
+                'test'     : test,
+                'name'     : '%s %s' % (test.base_engine, test.base.name),
+                'anchor'   : anchor,
+                'ratings'  : entry.ratings,
+                'games'    : test.games,
+                'penta'    : test.as_penta() if test.use_penta else None,
+                'score'    : 100.0 * points / games if games else None,
+                'elo'      : elo + 0.0 if games else None,
+                'error'    : max(upper - elo, elo - lower) if games else None,
+
+                # An Elo difference of ours is `scale` times as many points on the list
+                'implied'       : anchor + scale * elo if rated else None,
+                'implied_error' : scale * max(upper - elo, elo - lower) if rated else None,
+                'expected'      : 100.0 * expected_score(fit['rating'], anchor, scale) if fit and anchor != None else None,
+                'timeloss' : faults.get(test.id, {}).get('timeloss') or 0,
+                'crashes'  : faults.get(test.id, {}).get('crashes') or 0,
+                'removed'  : removed,
+            }
+
+            rows.append(row)
+
+        return sorted(rows, key=lambda row: (row['removed'], row['anchor'] == None, -(row['anchor'] or 0), row['name']))
+
+    def stat_lines(self, rating_list=None):
+
+        rating_list = rating_list or self.gauntlet.rating_list
+        done        = len([test for test in self.tests if test.finished])
+
+        # The one error quoted next to a rating is the one with the spread in it
+        if (fit := self.fit(rating_list)):
+            rating_line = 'Rating: %d +- %d (%s)' % (round(fit['rating']), round(fit['error_with_spread']), rating_list)
+        else:
+            rating_line = 'Rating: Pending (%s)' % (rating_list)
+
+        return [
+            rating_line,
+            'Games: %d W: %d L: %d D: %d' % (self.games, self.wins, self.losses, self.draws),
+            'Opponents: %d of %d finished' % (done, len(self.tests)),
+        ]
+
+    def long_stat_lines(self, rating_list=None):
+
+        rating_list = rating_list or self.gauntlet.rating_list
+        test        = self.first
+        threads     = int(OpenBench.utils.extract_option(test.dev_options, 'Threads'))
+        hashmb      = int(OpenBench.utils.extract_option(test.dev_options, 'Hash'))
+        timecontrol = test.dev_time_control + ['s', '']['=' in test.dev_time_control]
+
+        lines = []
+
+        if (fit := self.fit(rating_list)):
+            lines.append('Rating | %d +- %d (95%%) on %s' % (
+                round(fit['rating']), round(fit['error_with_spread']), rating_list))
+            if fit['spread'] >= 0.5:
+                lines.append('Spread | %d between opponents, +- %d from the games alone' % (
+                    round(fit['spread']), round(fit['error'])))
+            lines.append('Scale  | %.2f +- %.2f list points per Elo' % (fit['scale'], fit['scale_error']))
+        else:
+            lines.append('Rating | Pending on %s' % (rating_list))
+
+        lines.append('Conf   | %s Threads=%d Hash=%dMB' % (timecontrol, threads, hashmb))
+        lines.append('Games  | N: %d W: %d L: %d D: %d' % (self.games, self.wins, self.losses, self.draws))
+        lines.append('Versus | %d opponent%s, %d games each' % (
+            len(self.tests), '' if len(self.tests) == 1 else 's', test.max_games))
+
+        return lines
+
+def summarize(gauntlet_ids):
+
+    # Returns { id : Summary }, loading every Test in a single query
+
+    entries = GauntletOpponent.objects.filter(gauntlet_id__in=list(gauntlet_ids))
+    entries = entries.select_related('gauntlet', 'test', 'test__dev', 'test__base').order_by('id')
+
+    grouped = {}
+    for entry in entries:
+        grouped.setdefault(entry.gauntlet_id, []).append(entry)
+
+    return { pk : Summary(group[0].gauntlet, group) for pk, group in grouped.items() }
+
+def attach_summaries(tests):
+
+    # Tests that stand in for a Gauntlet in a list are given its Summary,
+    # as test.gauntlet_summary, which is what the Templates look for
+
+    tests   = list(tests)
+    members = { test.id : test for test in tests }
+
+    links = GauntletOpponent.objects.filter(test_id__in=list(members)).values_list('test_id', 'gauntlet_id')
+    links = dict(links)
+
+    summaries = summarize(set(links.values()))
+    for test_id, gauntlet_id in links.items():
+        members[test_id].gauntlet_summary = summaries[gauntlet_id]
+
+    return tests
+
+def without_gauntlets(tests):
+    return tests.filter(gauntlet_opponent__isnull=True)
+
+def collapse_test_lists(pending, active, completed):
+
+    # A Gauntlet takes one row in the lists of Tests, in the place of one row
+    # per opponent. It is Pending while any Test awaits approval, Active while
+    # any Test is being played, and Finished after that.
+    #
+    # Returns the Pending and Active rows as lists, and the Finished rows as a
+    # QuerySet, as there are pages of those. Pass a page of it on to
+    # attach_summaries(). The row that remains for a Gauntlet is one of its Tests.
+
+    pending = attach_summaries(pending)
+    active  = attach_summaries(active)
+
+    def one_row_each(tests, hidden):
+        rows, seen = [], set(hidden)
+        for test in tests:
+            if (summary := getattr(test, 'gauntlet_summary', None)):
+                if summary.id in seen: continue
+                seen.add(summary.id)
+            rows.append(test)
+        return rows
+
+    pending    = one_row_each(pending, [])
+    is_pending = [test.gauntlet_summary.id for test in pending if hasattr(test, 'gauntlet_summary')]
+    active     = one_row_each(active, is_pending)
+
+    # For the Finished rows the same is done by the database, so that counting
+    # and slicing pages still works. One grouped query finds the Gauntlets with
+    # nothing left to play, and the Test of each that was created last, which is
+    # the one that is kept. The row sits where that Test was last updated.
+
+    members = GauntletOpponent.objects.filter(test__deleted=False).values('gauntlet_id')
+    members = members.annotate(last=Max('test_id'), unfinished=Count('pk', filter=Q(test__finished=False)))
+    kept    = [member['last'] for member in members if not member['unfinished']]
+
+    completed = completed.filter(Q(gauntlet_opponent__isnull=True) | Q(id__in=kept))
+
+    return pending, active, completed
+
+## Viewing
+
+def find_summary(pk):
+
+    # None for anything that is not the id of a Gauntlet with opponents
+
+    try: pk = int(pk)
+    except (TypeError, ValueError): return None
+
+    return summarize([pk]).get(pk) if 0 < pk < 2 ** 31 else None
+
+def view_gauntlet(request, pk):
+
+    if not (summary := find_summary(pk)):
+        return OpenBench.views.redirect(request, '/index/', error='No such Gauntlet exists')
+
+    # Any list that rates one of the opponents may be looked at
+    rating_list = request.GET.get('list')
+    if rating_list not in summary.lists():
+        rating_list = summary.gauntlet.rating_list
+
+    data = {
+        'gauntlet'    : summary,
+        'workload'    : summary.first,
+        'rating_list' : rating_list,
+        'rows'        : summary.rows(rating_list),
+        'fits'        : summary.fits(),
+        'statblock'   : '\n'.join(summary.long_stat_lines(rating_list)),
+    }
+
+    return OpenBench.views.render(request, 'gauntlet.html', data)
+
+def gauntlet_to_dict(summary):
+
+    # Everything on the page of a Gauntlet, for scripts
+
+    def rounded(value):
+        return None if value == None else round(value, 2)
+
+    def fit_to_dict(fit):
+        return None if fit == None else { key : rounded(value) for key, value in fit.items() }
+
+    test = summary.first
+
+    return {
+        'id'           : summary.id,
+        'author'       : summary.author,
+        'info'         : summary.info,
+        'creation'     : str(summary.creation),
+        'rating_list'  : summary.gauntlet.rating_list,
+        'pending'      : summary.pending,
+        'active'       : summary.active,
+        'finished'     : summary.finished,
+        'deleted'      : summary.deleted,
+        'dev'          : {
+            'engine'       : test.dev_engine,
+            'name'         : test.dev.name,
+            'sha'          : test.dev.sha,
+            'network'      : test.dev_network,
+            'netname'      : test.dev_netname,
+            'options'      : test.dev_options,
+            'time_control' : test.dev_time_control,
+        },
+        'games'        : summary.games,
+        'wins'         : summary.wins,
+        'losses'       : summary.losses,
+        'draws'        : summary.draws,
+        'ratings'      : { each['list'] : fit_to_dict(each['fit']) for each in summary.fits() },
+        'opponents'    : [{
+            'test'      : row['test'].id,
+            'engine'    : row['test'].base_engine,
+            'name'      : row['test'].base.name,
+            'ratings'   : row['ratings'],
+            'max_games' : row['test'].max_games,
+            'finished'  : row['test'].finished,
+            'deleted'   : row['test'].deleted,
+            'games'     : row['games'],
+            'wins'      : row['test'].wins,
+            'losses'    : row['test'].losses,
+            'draws'     : row['test'].draws,
+            'penta'     : row['penta'],
+            'score'     : rounded(row['score']),
+            'elo'       : rounded(row['elo']),
+            'error'     : rounded(row['error']),
+            'implied'   : rounded(row['implied']),
+            'implied_error' : rounded(row['implied_error']),
+            'expected'  : rounded(row['expected']),
+            'timeloss'  : row['timeloss'],
+            'crashes'   : row['crashes'],
+        } for row in summary.rows()],
+    }
+
+def list_gauntlets(request, page=1):
+
+    # Every Gauntlet, newest first, as a history of the ratings
+
+    gauntlets = Gauntlet.objects.filter(opponents__test__deleted=False).distinct().order_by('-id')
+    start, end, paging = OpenBench.utils.getPaging(gauntlets, int(page), 'gauntlets')
+
+    wanted    = list(gauntlets[start:end].values_list('id', flat=True))
+    summaries = summarize(wanted)
+
+    data = { 'gauntlets' : [summaries[pk] for pk in wanted if pk in summaries], 'paging' : paging }
+    return OpenBench.views.render(request, 'gauntlets.html', data)
+
+## Modification
+
+def modify_gauntlet(request, pk, action):
+
+    actions = [ 'APPROVE', 'RESTART', 'STOP', 'DELETE', 'RESTORE', 'MODIFY' ]
+
+    if action not in actions:
+        return OpenBench.views.redirect(request, '/index/', error='Unknown Gauntlet action')
+
+    if not (summary := find_summary(pk)):
+        return OpenBench.views.redirect(request, '/index/', error='No such Gauntlet exists')
+
+    # Must be logged in to interact with Gauntlets
+    if not request.user.is_authenticated:
+        return OpenBench.views.redirect(request, '/login/', error='Only users may modify Gauntlets')
+
+    # Must be an approver, or interacting with their own Gauntlet
+    profile = Profile.objects.get(user=request.user)
+    if not profile.approver and summary.author != request.user.username:
+        return OpenBench.views.redirect(request, '/index/', error='You cannot interact with another user\'s Gauntlet')
+
+    if action == 'APPROVE' and not profile.approver:
+        return OpenBench.views.redirect(request, '/index/', error='You cannot approve this Gauntlet')
+
+    # Every action is that of a Test, applied to each Test that it applies to
+
+    def approve(test): test.approved = True
+    def restart(test): test.finished = False
+    def stop(test):    test.finished = True
+    def delete(test):  test.deleted  = True
+    def restore(test): test.deleted  = False
+
+    def modify(test):
+
+        try: test.priority = int(request.POST['priority'])
+        except: pass
+
+        try: test.throughput = max(1, int(request.POST['throughput']))
+        except: pass
+
+        try: test.workload_size = max(1, int(request.POST['workload_size']))
+        except: pass
+
+    # The change, the Tests it applies to, and the only fields it may write.
+    # Workers are adding results to these same rows while we are at it, and a
+    # Test read a moment ago must not write back that it is unfinished
+    applies = {
+        'APPROVE' : (approve, lambda test: not test.approved      , ['approved']),
+        'RESTART' : (restart, lambda test: test in summary.stopped, ['finished']),
+        'STOP'    : (stop   , lambda test: not test.finished      , ['finished']),
+        'DELETE'  : (delete , lambda test: not test.deleted       , ['deleted']),
+        'RESTORE' : (restore, lambda test: test.deleted           , ['deleted']),
+        'MODIFY'  : (modify , lambda test: True                   , ['priority', 'throughput', 'workload_size']),
+    }
+
+    change, applicable, fields = applies[action]
+
+    # Restoring reaches the Tests that were deleted on their own as well
+    tests = summary.every if action == 'RESTORE' else summary.tests
+
+    with transaction.atomic():
+
+        for test in filter(applicable, tests):
+            change(test)
+            test.save(update_fields=fields + ['updated'])
+            LogEvent.objects.create(author=request.user.username, summary=action, log_file='', test_id=test.id)
+
+        if action == 'MODIFY' and 'info' in request.POST:
+            summary.gauntlet.info = request.POST['info'][:1024]
+            summary.gauntlet.save()
+
+    messages = {
+        'APPROVE' : 'Gauntlet was Approved!', 'RESTART' : 'Gauntlet was Restarted!',
+        'STOP'    : 'Gauntlet was Stopped!',  'DELETE'  : 'Gauntlet was Deleted!',
+        'RESTORE' : 'Gauntlet was Restored!', 'MODIFY'  : 'Gauntlet was Modified!',
+    }
+
+    # A deleted Gauntlet is on no list, so there is only the index to return to
+    destination = '/index/' if action == 'DELETE' else '/gauntlet/%d/' % (summary.id)
+    return OpenBench.views.redirect(request, destination, status=messages[action])

@@ -49,6 +49,11 @@ urlpatterns = [
     re_path(r'^(?P<workload_type>tune|test|datagen)/new/$', views.new_workload),
     re_path(r'^(?P<workload_type>tune|test|datagen)/(?P<pk>\d+)(?:/(?P<action>\w+))?/$', views.workload),
 
+    # (Luminex fork) Links to create, view or manage Gauntlets
+    path(r'gauntlet/new/', views.new_gauntlet),
+    re_path(r'^gauntlet/(?P<pk>\d+)(?:/(?P<action>\w+))?/$', views.gauntlet),
+    re_path(r'^gauntlets(?:/(?P<page>\d+))?/$', views.gauntlets),
+
     # Links for viewing and managing Networks
     path(r'networks/', views.networks),
     path(r'networks/<str:engine>/', views.networks),
@@ -95,6 +100,7 @@ urlpatterns = [
     path(r'api/pgns/<int:pgn_id>/', views.api_pgns),
     path(r'api/spsa/<int:workload_id>/<str:query>/', views.api_spsa),
     path(r'api/workload/<int:workload_id>/<str:query>/', views.api_workload),
+    path(r'api/gauntlet/<int:gauntlet_id>/', views.api_gauntlet),
 
     # Redirect anything else to the Index
     path(r'', views.index),

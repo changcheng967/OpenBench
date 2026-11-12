@@ -1,0 +1,26 @@
+{
+    "private": false,
+    "nps": 1340000,
+    "source": "https://github.com/mhouppin/stash-bot",
+    "build": {
+        "path": "src",
+        "compilers": [
+            "gcc",
+            "gcc-14",
+            "gcc-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "v37.0",
+        "sha": "077a93828fee354853ffac322f178d1a4f1670ff",
+        "bench": 4646465,
+        "ratings": {
+            "CCRL Blitz": 3417,
+            "CCRL 40/15": 3373
+        }
+    }
+}

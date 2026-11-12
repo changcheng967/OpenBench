@@ -1,0 +1,26 @@
+{
+    "private": false,
+    "nps": 1120000,
+    "source": "https://github.com/Adam-Kulju/Patricia",
+    "build": {
+        "path": "engine",
+        "compilers": [
+            "g++>=12",
+            "g++-14",
+            "g++-13"
+        ],
+        "cpuflags": [],
+        "systems": [
+            "Linux"
+        ]
+    },
+    "rated": {
+        "branch": "5",
+        "sha": "fff43612c6dcb824fc805cdd08c3db4c328a3627",
+        "bench": 3296690,
+        "ratings": {
+            "CCRL Blitz": 3539,
+            "CCRL 40/15": 3459
+        }
+    }
+}
