@@ -9,6 +9,12 @@
 
     <script src="{% static 'workload_utils.js' %}?{{ static_version }}"></script>
 
+    <style>
+        #content {
+            max-width: 100%;
+        }
+    </style>
+
 {% endblock %}
 
 {% block content %}
@@ -139,8 +145,8 @@
     </div>
 
     <!-- The rating on every list that rates an opponent. Selecting a list changes the table below -->
-    <div id="ratings" class="w-100 mt-3" style="float:left;">
-        <table class="stripes wrappable summary-table w-100">
+    <div id="ratings" class="w-100 mt-3" style="float:left; overflow-x: auto;">
+        <table class="stripes wrappable gauntlet-table w-100">
             <tr class="table-header">
                 <th>Rating List</th>
                 <th>Rating</th>
@@ -169,8 +175,8 @@
     </div>
 
     <!-- One row per opponent, each of which is an ordinary Test -->
-    <div id="opponents" class="w-100 mt-3" style="float:left;">
-        <table class="stripes wrappable summary-table w-100">
+    <div id="opponents" class="w-100 mt-3" style="float:left; overflow-x: auto;">
+        <table class="stripes wrappable gauntlet-table w-100">
             <tr class="table-header">
                 <th>Opponent</th>
                 <th>{{rating_list}}</th>
@@ -181,14 +187,14 @@
                 <th>Penta</th>
                 <th>Score</th>
                 <th>Elo</th>
-                <th>Implied Rating</th>
+                <th>Implied</th>
                 <th>Expected</th>
                 <th style="width: 45px">Time</th>
                 <th style="width: 45px">Crash</th>
             </tr>
             {% for row in rows %}
                 <tr {% if not row.test.finished and row.test.approved %}class="active-highlight"{% endif %}>
-                    <td>
+                    <td class="gauntlet-opponent">
                         <a href="/test/{{row.test.id}}/">{{row.name}}</a>
                         {% if row.test.error %} <span style="color: red; cursor: pointer" title="Crash or illegal move">*</span> {% endif %}
                         {% if row.test.deleted %} <span title="This Test was deleted">(deleted)</span> {% endif %}
@@ -198,7 +204,7 @@
                     <td class="numeric">{{row.test.wins}}</td>
                     <td class="numeric">{{row.test.losses}}</td>
                     <td class="numeric">{{row.test.draws}}</td>
-                    <td>{% if row.penta %}({{row.penta|join:", "}}){% endif %}</td>
+                    <td>{% if row.penta %}{{row.penta|join:", "}}{% endif %}</td>
                     {% if row.games %}
                         <td class="numeric">{{row.score|floatformat:1}}%</td>
                         <td class="numeric">{{row.elo|floatformat:1}} ± {{row.error|floatformat:1}}</td>
@@ -218,8 +224,8 @@
         <p class="gauntlet-note">
             The rating is the one at which the points expected against all of the opponents equal the
             points scored, which is the maximum likelihood rating given each opponent's rating on the list.
-            Expected is the score that this rating predicts against an opponent, and Implied Rating is
-            what the games against that opponent alone would say. Time and Crash count the games that
+            Expected is the score that this rating predicts against an opponent, and Implied is the
+            rating that the games against that opponent alone would give. Time and Crash count the games that
             either side lost on time or by crashing. The error covers the luck of the games.
             The spread is how far the opponents disagree beyond that, as their own ratings are estimates,
             and were measured at the time control and on the hardware of the list, not at ours.

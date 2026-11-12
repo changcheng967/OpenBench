@@ -649,6 +649,17 @@ td pre {
     font-size: 14px;
 }
 
+/* One row per opponent, with a dozen columns: keep them narrow enough for a laptop */
+
+#content .gauntlet-table th, #content .gauntlet-table td {
+    font-size: 13px;
+    padding: 9px 8px 5px;
+}
+
+#content .gauntlet-table td.gauntlet-opponent {
+    white-space: normal;
+}
+
 #content .gauntlet-opponents input[type="checkbox"] {
     cursor: pointer;
 }
