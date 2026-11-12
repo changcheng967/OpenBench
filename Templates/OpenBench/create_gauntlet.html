@@ -33,7 +33,13 @@
 
         document.addEventListener(
             'DOMContentLoaded', function () {
-                change_gauntlet_engine('{{ dev_engine }}');
+
+                // A user without a default Engine starts on the first one listed
+                var engine = '{{ dev_engine }}';
+                if (!(engine in engines))
+                    engine = document.getElementById('dev_engine').value;
+
+                change_gauntlet_engine(engine);
                 enforce_default_text('dev_repo', 'https://github.com/');
             }, false
         );

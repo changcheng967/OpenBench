@@ -50,8 +50,9 @@ from OpenBench.workloads import verify_workload as verify
 ELO_PER_LOGIT = 400.0 / math.log(10.0)
 
 # How firmly the scale of a list is held at its nominal value, as the standard
-# deviation of the scale's logarithm. Weak: a dozen opponents outweigh it a
-# hundredfold. It only decides the matter when the games cannot.
+# deviation of the scale's logarithm. Weak: a dozen opponents with a few
+# hundred games each outweigh it a hundredfold. It only decides the matter
+# when the games cannot.
 SCALE_PRIOR = 0.4
 
 ## The rating
