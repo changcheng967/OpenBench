@@ -191,10 +191,12 @@ def cpuflagsBlock(machine, N=8):
     return ' '.join(reported)
 
 def compilerBlock(machine):
-    string = ''
-    for engine, info in machine.info['compilers'].items():
-        string += '%-16s %-8s (%s)\n' % (engine, info[0], info[1])
-    return string
+    # (Luminex fork) Each column as wide as its longest entry (16 and 8 at least), so a
+    # compiler name longer than 8 characters, such as clang++-23, keeps the versions aligned
+    rows = list(machine.info['compilers'].items())
+    ew = max([16] + [len(engine) for engine, _ in rows])
+    cw = max([8] + [len(info[0]) for _, info in rows])
+    return ''.join('%-*s %-*s (%s)\n' % (ew, engine, cw, info[0], info[1]) for engine, info in rows)
 
 def removePrefix(value, prefix):
     return value.removeprefix(prefix)
