@@ -4,16 +4,17 @@
 
 {% block content %}
 
-    {# (Luminex fork) Ten columns ran past the page once upstream added Microarch, which every molab worker #}
-    {# reports as Unknown (gVisor hides the CPU model). The system and the microarchitecture now show on #}
-    {# hovering the ISA, and long machine and workload names are cut, in full on hovering them. #}
-    <table class="hoverable">
+    {# (Luminex fork) The table fills the page and its long values wrap, so it never runs past the page: #}
+    {# molab machine names are 36-character UUIDs. Microarch is not a column: every molab worker reports #}
+    {# Unknown (gVisor hides the CPU model); it shows on hovering the ISA. #}
+    <table class="hoverable" style="width:100%">
 
         <tr class="table-header">
             <th>#</th>
             <th>User</th>
             <th>Name</th>
             <th>Status</th>
+            <th>System</th>
             <th>ISA</th>
             <th>Workload</th>
             <th>Threads</th>
@@ -24,7 +25,7 @@
             <tr>
                 <td class="numeric"><a href="/machines/{{machine.id}}/">{{machine.id}}</a></td>
                 <td>{{machine.user.username|capfirst}}</td>
-                <td title="{{machine.info.machine_name}}">{{machine.info.machine_name|truncatechars:13}}</td>
+                <td style="overflow-wrap:anywhere">{{machine.info.machine_name}}</td>
                 <td>
                     {% if machine|machine_status %}
                         <span style="color:#3fb950;font-weight:600">Online</span>
@@ -32,11 +33,12 @@
                         <span style="color:#8b949e">Offline</span>
                     {% endif %}
                 </td>
-                <td title="{{machine.info.os_name}} · microarchitecture {{machine.info.uarch_name}}">{{machine.info.isa_name}}</td>
-                <td>
+                <td>{{machine.info.os_name}}</td>
+                <td title="microarchitecture {{machine.info.uarch_name}}">{{machine.info.isa_name}}</td>
+                <td style="overflow-wrap:anywhere">
                     {% if machine.workload %}
-                        <a href="{{machine.workload|workload_url}}" title="{{machine.workload|workload_pretty_name}}">
-                            {{machine.workload|workload_pretty_name|truncatechars:13}}
+                        <a href="{{machine.workload|workload_url}}">
+                            {{machine.workload|workload_pretty_name}}
                         </a>
                     {% else %}
                         None
