@@ -4,9 +4,8 @@
 
 {% block content %}
 
-    {# (Luminex fork) The table fills the page and its long values wrap (the site's tables are nowrap), so it #}
-    {# never runs past the page: #}
-    {# molab machine names are 36-character UUIDs. Microarch is not a column: every molab worker reports #}
+    {# (Luminex fork) The table fills the page and never runs past it: machine names (molab's are 36-character #}
+    {# UUIDs) wrap at their hyphens, as do the ISA and the NPS pair; the site's tables are otherwise nowrap. Microarch is not a column: every molab worker reports #}
     {# Unknown (gVisor hides the CPU model); it shows on hovering the ISA. #}
     <table class="hoverable" style="width:100%">
 
@@ -26,7 +25,7 @@
             <tr>
                 <td class="numeric"><a href="/machines/{{machine.id}}/">{{machine.id}}</a></td>
                 <td>{{machine.user.username|capfirst}}</td>
-                <td style="white-space:normal;overflow-wrap:anywhere">{{machine.info.machine_name}}</td>
+                <td style="white-space:normal;overflow-wrap:break-word;min-width:13ch">{{machine.info.machine_name}}</td>
                 <td>
                     {% if machine|machine_status %}
                         <span style="color:#3fb950;font-weight:600">Online</span>
@@ -35,8 +34,8 @@
                     {% endif %}
                 </td>
                 <td>{{machine.info.os_name}}</td>
-                <td title="microarchitecture {{machine.info.uarch_name}}">{{machine.info.isa_name}}</td>
-                <td style="white-space:normal;overflow-wrap:anywhere">
+                <td style="white-space:normal" title="microarchitecture {{machine.info.uarch_name}}">{{machine.info.isa_name}}</td>
+                <td>
                     {% if machine.workload %}
                         <a href="{{machine.workload|workload_url}}">
                             {{machine.workload|workload_pretty_name}}
@@ -46,7 +45,7 @@
                     {% endif %}
                 </td>
                 <td class="numeric">{{machine.info.concurrency}}</td>
-                <td class="numeric">{{machine.dev_mnps|twoDigitPrecision}}M / {{machine.base_mnps|twoDigitPrecision}}M</td>
+                <td class="numeric" style="white-space:normal">{{machine.dev_mnps|twoDigitPrecision}}M / {{machine.base_mnps|twoDigitPrecision}}M</td>
             </tr>
         {% endfor %}
 
