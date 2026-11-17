@@ -40,6 +40,9 @@ import OpenBench.spsa_utils
 import OpenBench.utils
 import OpenBench.views
 
+import Client.isa_detector
+import Client.uarch_detector
+
 from OpenBench.config import OPENBENCH_CONFIG
 from OpenBench.models import *
 from OpenBench.workloads.verify_workload import verify_workload, determine_info
@@ -62,6 +65,10 @@ def create_workload(request, workload_type):
             'networks' : list(Network.objects.all().values()),
             'books'    : Book.objects.filter(enabled=True).order_by('name'),
             'engines'  : engines,
+
+            # Every ISA and Microarch a Client can report, for the regex selectors
+            'isa_names'   : Client.isa_detector.ISA_NAMES,
+            'uarch_names' : Client.uarch_detector.UARCH_NAMES,
 
             # The presets, nps and source are all applied by create_workload.js
             'engine_configs' : {
@@ -159,6 +166,9 @@ def create_new_test(request):
     test.scale_method      = request.POST['scale_method']
     test.scale_nps         = int(request.POST['scale_nps'])
 
+    test.isa_regex         = request.POST['isa_regex']
+    test.uarch_regex       = request.POST['uarch_regex']
+
     test.test_mode         = request.POST['test_mode']
 
     if test.test_mode == 'SPRT':
@@ -219,6 +229,9 @@ def create_new_tune(request):
     test.scale_method     = request.POST['scale_method']
     test.scale_nps        = int(request.POST['scale_nps'])
 
+    test.isa_regex        = request.POST['isa_regex']
+    test.uarch_regex      = request.POST['uarch_regex']
+
     test.test_mode        = 'SPSA'
 
     if test.dev_network:
@@ -278,6 +291,9 @@ def create_new_datagen(request):
 
     test.scale_method      = request.POST['scale_method']
     test.scale_nps         = int(request.POST['scale_nps'])
+
+    test.isa_regex         = request.POST['isa_regex']
+    test.uarch_regex       = request.POST['uarch_regex']
 
     test.test_mode         = 'DATAGEN'
 

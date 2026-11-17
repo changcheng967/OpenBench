@@ -51,6 +51,7 @@ import bench
 import genfens
 import isa_detector
 import pgn_util
+import uarch_detector
 import utils
 
 ## Local imports from client are an exception
@@ -68,7 +69,9 @@ from client import try_forever
 # 63: default -T to one game per usable core (was half the cores).
 # 64: rounds-per-runner means rounds (one opening each); runners and genfens
 #     books step by whole rounds, so no opening is played twice.
-CLIENT_VERSION   = 64 # Client version to send to the Server
+# 65: upstream's v54 merged in: the client reports the CPU's microarchitecture,
+#     which workloads can match with an isa/uarch regex.
+CLIENT_VERSION   = 65 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -92,6 +95,7 @@ class Configuration:
         self.cpu_flags      = []
         self.cpu_name       = ''
         self.isa_name       = ''
+        self.uarch_name     = ''
         self.os_name        = platform.system()
         self.os_ver         = platform.release()
         self.python_ver     = platform.python_version()
@@ -319,6 +323,14 @@ int main() {
         # Match the machine to a Stockfish-style ISA using our C++ compiler
         self.isa_name = isa_detector.detect_isa(self.cxx_comp)
         print('Found   | %s' % (self.isa_name))
+
+    def determine_uarch(self):
+
+        print('\nDetermining micro-architecture...')
+
+        # Match the machine to a micro-architecture using the CPU's family and model
+        self.uarch_name = uarch_detector.detect_uarch()
+        print('Found   | %s' % (self.uarch_name))
 
     def determine_huge_pages(self):
 
@@ -1122,6 +1134,7 @@ def server_configure_worker(config):
     config.scan_for_private_tokens(data) # Private engine access tokens
     config.scan_for_cpu_flags(data)      # For executing binaries
     config.determine_isa()               # Stockfish-style ISA of this machine
+    config.determine_uarch()             # Micro-architecture of this machine, e.g. zen4
     config.determine_huge_pages()        # Transparent Huge Pages mode of this machine
     config.machine_id = None             # None, until registration occurs for a session
 
@@ -1131,6 +1144,7 @@ def server_configure_worker(config):
         'cpu_flags'      : config.cpu_flags,      # List of CPU flags found in the Client or Server
         'cpu_name'       : config.cpu_name,       # Raw CPU name as per py-cpuinfo
         'isa_name'       : config.isa_name,       # Stockfish-style ISA, e.g. x86-64-avx2
+        'uarch_name'     : config.uarch_name,     # Micro-architecture, e.g. zen4, or Unknown
         'os_name'        : config.os_name,        # Should be Windows, Linux, or Darwin
         'os_ver'         : config.os_ver,         # Release version of the OS
         'python_ver'     : config.python_ver,     # Python version running the Client
@@ -1543,12 +1557,14 @@ def reload_local_imports():
     import genfens
     import isa_detector
     import pgn_util
+    import uarch_detector
     import utils
 
     importlib.reload(bench)
     importlib.reload(genfens)
     importlib.reload(isa_detector)
     importlib.reload(pgn_util)
+    importlib.reload(uarch_detector)
     importlib.reload(utils)
 
 def parse_arguments(client_args):
