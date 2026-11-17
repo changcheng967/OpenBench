@@ -4,6 +4,9 @@
 
 {% block content %}
 
+    {# (Luminex fork) Ten columns ran past the page once upstream added Microarch, which every molab worker #}
+    {# reports as Unknown (gVisor hides the CPU model). The system and the microarchitecture now show on #}
+    {# hovering the ISA, and long machine and workload names are cut, in full on hovering them. #}
     <table class="hoverable">
 
         <tr class="table-header">
@@ -11,9 +14,7 @@
             <th>User</th>
             <th>Name</th>
             <th>Status</th>
-            <th>System</th>
             <th>ISA</th>
-            <th>Microarch</th>
             <th>Workload</th>
             <th>Threads</th>
             <th>NPS</th>
@@ -23,7 +24,7 @@
             <tr>
                 <td class="numeric"><a href="/machines/{{machine.id}}/">{{machine.id}}</a></td>
                 <td>{{machine.user.username|capfirst}}</td>
-                <td>{{machine.info.machine_name}}</td>
+                <td title="{{machine.info.machine_name}}">{{machine.info.machine_name|truncatechars:13}}</td>
                 <td>
                     {% if machine|machine_status %}
                         <span style="color:#3fb950;font-weight:600">Online</span>
@@ -31,13 +32,11 @@
                         <span style="color:#8b949e">Offline</span>
                     {% endif %}
                 </td>
-                <td>{{machine.info.os_name}}</td>
-                <td>{{machine.info.isa_name}}</td>
-                <td>{{machine.info.uarch_name}}</td>
+                <td title="{{machine.info.os_name}} · microarchitecture {{machine.info.uarch_name}}">{{machine.info.isa_name}}</td>
                 <td>
                     {% if machine.workload %}
-                        <a href="{{machine.workload|workload_url}}">
-                            {{machine.workload|workload_pretty_name}}
+                        <a href="{{machine.workload|workload_url}}" title="{{machine.workload|workload_pretty_name}}">
+                            {{machine.workload|workload_pretty_name|truncatechars:13}}
                         </a>
                     {% else %}
                         None
