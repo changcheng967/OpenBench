@@ -50,9 +50,11 @@
                         day    : '2-digit',
                     };
 
+                    // (Luminex fork) English month names in every browser ("Nov 14"), like the
+                    // server-side dates elsewhere; the browser's locale wrote "11月14日" on a Chinese system
                     for (var i = 0; i < datestamps.length; i++) {
                         var date = new Date(1000 * datestamps[i].textContent);
-                        datestamps[i].textContent = date.toLocaleString(undefined, options);
+                        datestamps[i].textContent = date.toLocaleString('en-US', options);
                     }
                 }
 
