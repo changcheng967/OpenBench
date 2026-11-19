@@ -81,6 +81,39 @@ IS_WINDOWS = platform.system() == 'Windows' # Don't touch this
 IS_LINUX   = platform.system() != 'Windows' # Don't touch this
 
 
+def machine_identity():
+
+    # The server keeps one machine row per MAC address. A locally administered
+    # MAC (bit 0x02 of the first octet) is one a hypervisor made up, and microVM
+    # platforms give every guest the same one (Firecracker's 02:FC:00:00:00:05 on
+    # E2B), so two such workers shared one row and kept invalidating each other's
+    # secret ("Bad Client Version: Invalid Secret Token", a client re-download
+    # every few seconds). Those MACs get a random id kept beside this file, so
+    # each install has its own row and keeps it across restarts.
+
+    node = uuid.getnode()
+    mac  = hex(node).upper()[2:]
+    if not (node >> 40) & 0x02:
+        return mac
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.instance_id')
+    try:
+        with open(path) as fin:
+            iid = fin.read().strip()
+    except OSError:
+        iid = ''
+
+    if len(iid) != 12 or any(c not in '0123456789ABCDEF' for c in iid):
+        iid = uuid.uuid4().hex[:12].upper()
+        try:
+            with open(path, 'w') as fout:
+                fout.write(iid + '\n')
+        except OSError:
+            pass
+
+    return '%s-%s' % (mac, iid)
+
+
 class Configuration:
 
     ## Handles configuring the worker with the server. This means collecting
@@ -99,7 +132,7 @@ class Configuration:
         self.os_name        = platform.system()
         self.os_ver         = platform.release()
         self.python_ver     = platform.python_version()
-        self.mac_address    = hex(uuid.getnode()).upper()[2:]
+        self.mac_address    = machine_identity()
         self.logical_cores  = psutil.cpu_count(logical=True)
         self.physical_cores = psutil.cpu_count(logical=False)
         # Cgroup-quota-aware count: os/psutil report the HOST inside
