@@ -878,14 +878,19 @@ def client_get_workload(request, machine):
 @verify_worker
 def client_bench_error(request, machine):
 
-    # Find and stop the test with the bad bench
-    test = Test.objects.get(id=int(request.POST['test_id']))
-    test.finished = True; test.save()
+    # Find and stop the test with the bad bench, unless other machines have played it already: then the failure
+    # is this machine's (a CPU without the binary's instruction set, a missing library), not the engine's, and the
+    # client skips the test from now on (its blacklist). One worker that cannot run an engine stopped test 177 at
+    # 642 games, LLR 2.72 of 2.94 (2026-11-20).
+    test   = Test.objects.get(id=int(request.POST['test_id']))
+    played = test.wins + test.losses + test.draws
+    if not played:
+        test.finished = True; test.save()
 
     # Log the error into the Events table
     LogEvent.objects.create(
         author     = machine.user.username,
-        summary    = request.POST['error'],
+        summary    = request.POST['error'] + ('' if not played else ' (the test runs on: %d games played)' % played),
         log_file   = '',
         machine_id = int(request.POST['machine_id']),
         test_id    = int(request.POST['test_id']))
